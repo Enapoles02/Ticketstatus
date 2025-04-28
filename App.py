@@ -1,10 +1,14 @@
 # app.py
-# ------------------------------------------------------------------
-# Streamlit dashboard – Aging por Tower
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Streamlit dashboard – Aging por Tower + Firebase Firestore
+# -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import datetime as dt
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore
+from io import BytesIO
 from pathlib import Path
 
 st.set_page_config(
@@ -13,46 +17,42 @@ st.set_page_config(
     layout="wide",
 )
 
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
 # Constantes
-# ------------------------------------------------------------------
-DEFAULT_DATAFILE = "tickets.xlsx"                    # nombre por defecto
-ADMIN_CODE       = "ADMIN"                           # clave para activar modo admin
-OPEN_STATES_STOP = ["closed", "resolved", "cancel"]  # palabras que indican ticket cerrado
+# -----------------------------------------------------------
+ADMIN_CODE = "ADMIN"
+COLLECTION_NAME = "aging_dashboard"
+DOCUMENT_ID = "latest_upload"
+LOCAL_CREDENTIALS = "firebase_config.json"
 
 
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Inicializar conexión Firebase
+# -----------------------------------------------------------
+if not firebase_admin._apps:
+    cred = credentials.Certificate(LOCAL_CREDENTIALS)
+    firebase_admin.initialize_app(cred)
+db = firestore.client()
+
+# -----------------------------------------------------------
 # Funciones
-# ------------------------------------------------------------------
-def load_data(path_or_buffer) -> pd.DataFrame:
-    """Lee el Excel y agrega columnas derivadas necesarias."""
-    df = pd.read_excel(path_or_buffer)
-
-    # ---- Columnas derivadas --------------------------------------------------
+# -----------------------------------------------------------
+def load_data_from_excel(uploaded_file) -> pd.DataFrame:
+    df = pd.read_excel(uploaded_file)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-
-    # Age robusto en días
     today_midnight = pd.Timestamp("today").normalize()
     df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
-
-    # País y código de compañía
-    df["Country"]     = df["Client Codes Coding"].str[:2]
+    df["Country"] = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
-
-    # Banderas de aging
-    df["TODAY"]      = df["Age"] == 0
-    df["YESTERDAY"]  = df["Age"] == 1
+    df["TODAY"] = df["Age"] == 0
+    df["YESTERDAY"] = df["Age"] == 1
     df["THREE_DAYS"] = df["Age"].between(2, 3)
-
-    # Abierto / cerrado
-    pattern = "|".join(OPEN_STATES_STOP)
+    pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
-
     return df
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    """Devuelve tabla con métricas por Assignment group (Tower)."""
     agg = df.groupby("Assignment group").agg(
         OPEN_TICKETS=("is_open", "sum"),
         TICKETS_total=("Number", "count"),
@@ -60,110 +60,104 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
         YESTERDAY=("YESTERDAY", "sum"),
         THREE_DAYS=("THREE_DAYS", "sum"),
     ).reset_index()
-
     agg = agg.rename(columns={
         "Assignment group": "TOWER",
         "TICKETS_total": "TICKETS (total)",
-        "THREE_DAYS": "3 DAYS",
+        "THREE_DAYS": "3 DAYS"
     })
-
     return agg.sort_values("TOWER")
 
 
-def safe_rerun():
-    """Rerun compatible con cualquier versión de Streamlit."""
-    if hasattr(st, "rerun"):
-        st.rerun()                 # Streamlit >= 1.25
+def upload_to_firestore(df: pd.DataFrame):
+    """Sube DataFrame como JSON a Firestore."""
+    data_json = json.loads(df.to_json(orient="records"))
+    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({"data": data_json, "last_update": dt.datetime.utcnow()})
+
+
+def download_from_firestore() -> pd.DataFrame:
+    """Descarga DataFrame desde Firestore."""
+    doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
+    if doc.exists:
+        content = doc.to_dict()
+        df = pd.DataFrame(content["data"])
+        return df, content.get("last_update")
     else:
-        st.experimental_rerun()    # Streamlit < 1.25
+        return pd.DataFrame(), None
 
+# -----------------------------------------------------------
+# Cabecera
+# -----------------------------------------------------------
+st.title("📊 Aging Dashboard por Tower (vía Firebase)")
 
-# ------------------------------------------------------------------
-# Inicialización del estado de sesión
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Estado de sesión
+# -----------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
-if "last_update" not in st.session_state:
-    st.session_state.last_update = None
-
-if "data" not in st.session_state:
-    default_path = Path(DEFAULT_DATAFILE)
-    if default_path.exists():
-        st.session_state.data = load_data(default_path)
-        st.session_state.last_update = dt.datetime.now()
-    else:
-        st.session_state.data = None
-
-# ------------------------------------------------------------------
-# Barra lateral: filtros
-# ------------------------------------------------------------------
-st.sidebar.header("Filtros")
-
-if st.session_state.data is not None:
-    base_df = st.session_state.data
-
-    # Filtro País
-    countries = sorted(base_df["Country"].dropna().unique())
-    sel_country = st.sidebar.multiselect("País (CA / US)", countries, default=countries)
-
-    # Filtro CompanyCode
-    companies = sorted(base_df["CompanyCode"].dropna().unique())
-    sel_company = st.sidebar.multiselect("Compañía (últimos 4 dígitos)", companies, default=companies)
-
-    df_filtered = base_df[
-        base_df["Country"].isin(sel_country) &
-        base_df["CompanyCode"].isin(sel_company)
-    ]
-else:
-    df_filtered = pd.DataFrame()
-
-# ------------------------------------------------------------------
-# Cabecera
-# ------------------------------------------------------------------
-st.title("📊 Aging Dashboard por Tower")
-
-# ------------------------------------------------------------------
-# Sección de administración y carga de archivo
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Acceso Admin para subir archivo
+# -----------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
-        pwd = st.text_input("Introduce código ADMIN para habilitar la carga de datos", type="password")
+        pwd = st.text_input("Introduce código ADMIN para habilitar carga", type="password")
         if pwd == ADMIN_CODE:
             st.session_state.admin = True
             st.success("Modo admin habilitado ✅")
     else:
         st.info("Modo admin activo")
         uploaded = st.file_uploader("Cargar nuevo archivo Excel", type=["xls", "xlsx"])
-        if uploaded is not None:
-            st.session_state.data = load_data(uploaded)
-            st.session_state.last_update = dt.datetime.now()
-            st.success("Base de datos actualizada correctamente")
-            safe_rerun()   # recarga la app con los nuevos datos
+        if uploaded:
+            df_new = load_data_from_excel(uploaded)
+            upload_to_firestore(df_new)
+            st.success("Base de datos subida exitosamente a Firebase 🔥")
+            st.rerun()
 
-# ------------------------------------------------------------------
-# Dashboard principal
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Cargar datos desde Firebase
+# -----------------------------------------------------------
+df, last_update = download_from_firestore()
+
+# -----------------------------------------------------------
+# Sidebar – Filtros
+# -----------------------------------------------------------
+if not df.empty:
+    st.sidebar.header("Filtros")
+    countries = sorted(df["Country"].dropna().unique())
+    companies = sorted(df["CompanyCode"].dropna().unique())
+
+    sel_country = st.sidebar.multiselect("País (CA / US)", countries, default=countries)
+    sel_company = st.sidebar.multiselect("Compañía (últimos 4 dígitos)", companies, default=companies)
+
+    df_filtered = df[
+        df["Country"].isin(sel_country) &
+        df["CompanyCode"].isin(sel_company)
+    ]
+else:
+    df_filtered = pd.DataFrame()
+
+# -----------------------------------------------------------
+# Dashboard
+# -----------------------------------------------------------
 if df_filtered.empty:
-    st.warning("No hay datos disponibles. Carga un archivo válido o ajusta los filtros.")
+    st.warning("No hay datos disponibles.")
 else:
     st.subheader("Resumen por Tower")
     summary = summarize(df_filtered)
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    # Métricas globales
     col1, col2 = st.columns(2)
     col1.metric("🎫 Tickets abiertos", int(summary["OPEN_TICKETS"].sum()))
     col2.metric("📄 Tickets totales", int(summary["TICKETS (total)"].sum()))
 
-# ------------------------------------------------------------------
-# Footer – última actualización
-# ------------------------------------------------------------------
+# -----------------------------------------------------------
+# Footer – Última carga
+# -----------------------------------------------------------
 st.markdown(
     f"""
     <div style="position:fixed; bottom:0; left:0; padding:6px 12px; font-size:0.8rem; color:#666;">
         Última actualización:&nbsp;
-        <strong>{st.session_state.last_update.strftime('%Y-%m-%d %H:%M:%S') if st.session_state.last_update else '–'}</strong>
+        <strong>{last_update.strftime('%Y-%m-%d %H:%M:%S') if last_update else '–'}</strong>
     </div>
     """,
     unsafe_allow_html=True,
