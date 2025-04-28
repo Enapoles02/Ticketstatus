@@ -9,6 +9,7 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import io
+import matplotlib.pyplot as plt
 
 st.set_page_config(
     page_title="TICKETS DASHBOARD",
@@ -41,8 +42,12 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     today_midnight = pd.Timestamp("today").normalize()
     df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
-    df["Country"] = df["Client Codes Coding"].str[:2]
-    df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
+    if "Client Codes Coding" in df.columns:
+        df["Country"] = df["Client Codes Coding"].str[:2]
+        df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
+    else:
+        df["Country"] = ""
+        df["CompanyCode"] = ""
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
 
     df["Today"] = df["Age"] == 0
@@ -72,6 +77,12 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 def upload_to_firestore(df: pd.DataFrame):
     """Upload DataFrame as JSON to Firestore."""
+    df = df.copy()
+
+    # 🔥 Replace NaT with None for datetime fields
+    for col in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        df[col] = df[col].where(df[col].notna(), None)
+
     data_json = df.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": data_json,
@@ -181,14 +192,54 @@ else:
 if df_filtered.empty:
     st.warning("No available data. Please upload a file.")
 else:
-    st.subheader("Summary by Tower")
+    st.subheader("Dashboard Overview")
+
     summary = summarize(df_filtered)
 
-    col1, col2 = st.columns(2)
-    col1.metric("🎫 Open Tickets", int(summary["OPEN_TICKETS"].sum()))
-    col2.metric("🕑 +3 Days Tickets", int(summary["+3 Days"].sum()))
+    # KPIs
+    total_open = int(summary["OPEN_TICKETS"].sum())
+    total_plus3 = int(summary["+3 Days"].sum())
+    percent_overdue = (total_plus3 / total_open) * 100 if total_open > 0 else 0
 
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("🎫 Total Open Tickets", total_open)
+    kpi2.metric("🕑 Total +3 Days Tickets", total_plus3)
+    kpi3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
+
+    st.subheader("Summary by Tower")
     st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    # Sidebar filter for towers (for graphs)
+    st.sidebar.header("Graph Filters")
+    sel_towers = st.sidebar.multiselect("Select Towers for Graphs", summary["TOWER"].unique(), default=summary["TOWER"].unique())
+
+    summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
+
+    # 📊 Pie Chart 1: Open Tickets Distribution
+    st.subheader("Tickets Distribution by Tower")
+    fig1, ax1 = plt.subplots()
+    ax1.pie(
+        summary_filtered["OPEN_TICKETS"],
+        labels=summary_filtered["TOWER"],
+        autopct='%1.1f%%',
+        startangle=90,
+        counterclock=False
+    )
+    ax1.axis('equal')
+    st.pyplot(fig1)
+
+    # 📊 Pie Chart 2: +3 Days Tickets Distribution
+    st.subheader("+3 Days Tickets Distribution by Tower")
+    fig2, ax2 = plt.subplots()
+    ax2.pie(
+        summary_filtered["+3 Days"],
+        labels=summary_filtered["TOWER"],
+        autopct='%1.1f%%',
+        startangle=90,
+        counterclock=False
+    )
+    ax2.axis('equal')
+    st.pyplot(fig2)
 
     # 📥 Download button
     excel_data = to_excel(summary)
@@ -200,13 +251,24 @@ else:
     )
 
 # -----------------------------------------------------------
-# Footer with last update
+# Footer with last update (centered and always visible)
 # -----------------------------------------------------------
+footer_text = f"Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}" if last_update else "Last update: –"
+
 st.markdown(
     f"""
-    <div style="position:fixed; bottom:0; left:0; padding:6px 12px; font-size:0.75rem; color:#aaa;">
-        Last update:&nbsp;
-        <strong>{last_update.strftime('%Y-%m-%d %H:%M:%S') if last_update else '–'}</strong>
+    <div style="
+        position:fixed; 
+        bottom:0; 
+        left:0; 
+        width:100%;
+        text-align:center;
+        padding:6px; 
+        font-size:0.75rem; 
+        color:#aaa;
+        background-color:#f9f9f9;
+    ">
+        {footer_text}
     </div>
     """,
     unsafe_allow_html=True,
