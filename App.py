@@ -1,8 +1,7 @@
 # app.py
-# -----------------------------------------------------------
+# ------------------------------------------------------------------
 # Streamlit dashboard – Aging por Tower
-# Autor: ChatGPT – 2025-04-28
-# -----------------------------------------------------------
+# ------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import datetime as dt
@@ -15,29 +14,36 @@ st.set_page_config(
 )
 
 # ------------------------------------------------------------------
-# Helpers
+# Constantes
 # ------------------------------------------------------------------
-DEFAULT_DATAFILE = "tickets.xlsx"          # archivo “por defecto” en el mismo folder
-ADMIN_CODE       = "ADMIN"                 # clave mágica para activar modo admin
-OPEN_STATES_STOP = ["closed", "resolved", "cancel"]
+DEFAULT_DATAFILE = "tickets.xlsx"        # nombre por defecto si existe en la carpeta
+ADMIN_CODE       = "ADMIN"               # clave para activar modo admin
+OPEN_STATES_STOP = ["closed", "resolved", "cancel"]  # palabras que definen ticket cerrado
 
 
-def load_data(path: Path) -> pd.DataFrame:
-    """Lee el Excel y normaliza columnas clave."""
-    df = pd.read_excel(path)
-    # ─── Limpieza / columnas derivadas ───────────────────────────
+# ------------------------------------------------------------------
+# Funciones
+# ------------------------------------------------------------------
+def load_data(path_or_buffer) -> pd.DataFrame:
+    """Lee el Excel y construye todas las columnas necesarias."""
+    df = pd.read_excel(path_or_buffer)
+
+    # --- Columnas derivadas ---------------------------------------------------
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-    df["Country"] = df["Client Codes Coding"].str[:2]
+
+    # Cálculo robusto del age en días
+    today_midnight = pd.Timestamp("today").normalize()
+    df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
+
+    df["Country"]     = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
-    today = dt.date.today()
-    df["Age"] = (today - df["Created"].dt.date).dt.days
 
-    # banderas de aging
-    df["TODAY"]      = (df["Age"] == 0)
-    df["YESTERDAY"]  = (df["Age"] == 1)
-    df["THREE_DAYS"] = (df["Age"].between(2, 3))
+    # Banderas de aging
+    df["TODAY"]      = df["Age"] == 0
+    df["YESTERDAY"]  = df["Age"] == 1
+    df["THREE_DAYS"] = df["Age"].between(2, 3)
 
-    # abierto / cerrado
+    # Abierto / cerrado
     pattern = "|".join(OPEN_STATES_STOP)
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
 
@@ -45,7 +51,7 @@ def load_data(path: Path) -> pd.DataFrame:
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    """Genera la tabla de salida requerida."""
+    """Devuelve tabla con métricas por 'Assignment group'."""
     agg = df.groupby("Assignment group").agg(
         OPEN_TICKETS=("is_open", "sum"),
         TICKETS_total=("Number", "count"),
@@ -62,7 +68,7 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------------
-# Estado de la sesión
+# Estado de sesión
 # ------------------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
@@ -81,28 +87,31 @@ if "data" not in st.session_state:
 # ------------------------------------------------------------------
 st.sidebar.header("Filtros")
 if st.session_state.data is not None:
-    df_base = st.session_state.data
-    # País
-    countries = sorted(df_base["Country"].dropna().unique())
+    base_df = st.session_state.data
+
+    # Filtro País
+    countries = sorted(base_df["Country"].dropna().unique())
     sel_country = st.sidebar.multiselect("País (CA / US)", countries, default=countries)
 
-    # Compañía (últimos 4 dígitos)
-    companies = sorted(df_base["CompanyCode"].dropna().unique())
-    sel_company = st.sidebar.multiselect("Compañía (cód. 4 dígitos)", companies, default=companies)
+    # Filtro CompanyCode
+    companies = sorted(base_df["CompanyCode"].dropna().unique())
+    sel_company = st.sidebar.multiselect("Compañía (últimos 4 dígitos)", companies, default=companies)
 
-    df_filtered = df_base[
-        df_base["Country"].isin(sel_country) &
-        df_base["CompanyCode"].isin(sel_company)
+    df_filtered = base_df[
+        base_df["Country"].isin(sel_country) &
+        base_df["CompanyCode"].isin(sel_company)
     ]
 else:
     df_filtered = pd.DataFrame()
 
 # ------------------------------------------------------------------
-# Cabecera
+# Cabecera de la página
 # ------------------------------------------------------------------
 st.title("📊 Aging Dashboard por Tower")
 
-# Botón para activar modo Admin
+# ------------------------------------------------------------------
+# Expander para modo Admin y carga de archivo
+# ------------------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
         pwd = st.text_input("Introduce código ADMIN para habilitar la carga de datos", type="password")
@@ -112,28 +121,26 @@ with st.expander("🔐 Acceso de administrador"):
     else:
         st.info("Modo admin activo")
         uploaded = st.file_uploader("Cargar nuevo archivo Excel", type=["xls", "xlsx"])
-        if uploaded:
+        if uploaded is not None:
             st.session_state.data = load_data(uploaded)
             st.session_state.last_update = dt.datetime.now()
             st.success("Base de datos actualizada correctamente")
+            st.experimental_rerun()
 
 # ------------------------------------------------------------------
-# Contenido principal
+# Dashboard principal
 # ------------------------------------------------------------------
 if df_filtered.empty:
     st.warning("No hay datos disponibles. Carga un archivo válido o ajusta los filtros.")
 else:
     st.subheader("Resumen por Tower")
-    summary_table = summarize(df_filtered)
-    st.dataframe(summary_table, use_container_width=True, hide_index=True)
+    summary = summarize(df_filtered)
+    st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    # Índices rápidos
-    total_open   = summary_table["OPEN TICKETS"].sum()
-    total_tickets = summary_table["TICKETS (total)"].sum()
-
+    # Métricas globales
     col1, col2 = st.columns(2)
-    col1.metric("🎫 Tickets Abiertos", total_open)
-    col2.metric("📄 Tickets Totales", total_tickets)
+    col1.metric("🎫 Tickets abiertos", int(summary["OPEN_TICKETS"].sum()))
+    col2.metric("📄 Tickets totales", int(summary["TICKETS (total)"].sum()))
 
 # ------------------------------------------------------------------
 # Footer – Hora de la última carga
