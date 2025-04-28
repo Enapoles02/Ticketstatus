@@ -1,6 +1,6 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower + Firebase Firestore
+# Streamlit dashboard – Aging por Tower + Firebase (secrets)
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -9,7 +9,6 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from io import BytesIO
-from pathlib import Path
 
 st.set_page_config(
     page_title="Aging Dashboard",
@@ -23,14 +22,13 @@ st.set_page_config(
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
-LOCAL_CREDENTIALS = "firebase_config.json"
-
 
 # -----------------------------------------------------------
-# Inicializar conexión Firebase
+# Inicializar Firebase desde secrets
 # -----------------------------------------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate(LOCAL_CREDENTIALS)
+    firebase_credentials = json.loads(st.secrets["firebase_credentials"])
+    cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -71,10 +69,13 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 def upload_to_firestore(df: pd.DataFrame):
     """Sube DataFrame como JSON a Firestore."""
     data_json = json.loads(df.to_json(orient="records"))
-    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({"data": data_json, "last_update": dt.datetime.utcnow()})
+    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
+        "data": data_json,
+        "last_update": dt.datetime.utcnow()
+    })
 
 
-def download_from_firestore() -> pd.DataFrame:
+def download_from_firestore() -> (pd.DataFrame, dt.datetime):
     """Descarga DataFrame desde Firestore."""
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
     if doc.exists:
@@ -85,18 +86,18 @@ def download_from_firestore() -> pd.DataFrame:
         return pd.DataFrame(), None
 
 # -----------------------------------------------------------
-# Cabecera
-# -----------------------------------------------------------
-st.title("📊 Aging Dashboard por Tower (vía Firebase)")
-
-# -----------------------------------------------------------
 # Estado de sesión
 # -----------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
 # -----------------------------------------------------------
-# Acceso Admin para subir archivo
+# Título
+# -----------------------------------------------------------
+st.title("📊 Aging Dashboard por Tower (con Firebase)")
+
+# -----------------------------------------------------------
+# Acceso Admin para carga
 # -----------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
@@ -110,11 +111,11 @@ with st.expander("🔐 Acceso de administrador"):
         if uploaded:
             df_new = load_data_from_excel(uploaded)
             upload_to_firestore(df_new)
-            st.success("Base de datos subida exitosamente a Firebase 🔥")
+            st.success("Base de datos subida exitosamente 🔥")
             st.rerun()
 
 # -----------------------------------------------------------
-# Cargar datos desde Firebase
+# Leer data desde Firebase
 # -----------------------------------------------------------
 df, last_update = download_from_firestore()
 
