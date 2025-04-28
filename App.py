@@ -1,6 +1,6 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower extraído de texto
+# Streamlit dashboard – Aging por Tower extraído de texto y Firebase
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -44,7 +44,7 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df["Country"] = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
 
-    # 🔥 Nueva columna TowerGroup: extrayendo la segunda palabra de Assignment group
+    # 🔥 Nueva columna TowerGroup
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
 
     df["TODAY"] = df["Age"] == 0
@@ -140,6 +140,10 @@ with st.expander("🔐 Acceso de administrador"):
 # Leer data desde Firebase
 # -----------------------------------------------------------
 df, last_update = download_from_firestore()
+
+# 🔥 Asegurarnos que siempre exista TowerGroup aunque venga de Firebase
+if not df.empty and "TowerGroup" not in df.columns:
+    df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
 
 # -----------------------------------------------------------
 # Sidebar – Filtros
