@@ -16,25 +16,26 @@ st.set_page_config(
 # ------------------------------------------------------------------
 # Constantes
 # ------------------------------------------------------------------
-DEFAULT_DATAFILE = "tickets.xlsx"        # nombre por defecto si existe en la carpeta
-ADMIN_CODE       = "ADMIN"               # clave para activar modo admin
-OPEN_STATES_STOP = ["closed", "resolved", "cancel"]  # palabras que definen ticket cerrado
+DEFAULT_DATAFILE = "tickets.xlsx"                    # nombre por defecto
+ADMIN_CODE       = "ADMIN"                           # clave para activar modo admin
+OPEN_STATES_STOP = ["closed", "resolved", "cancel"]  # palabras que indican ticket cerrado
 
 
 # ------------------------------------------------------------------
 # Funciones
 # ------------------------------------------------------------------
 def load_data(path_or_buffer) -> pd.DataFrame:
-    """Lee el Excel y construye todas las columnas necesarias."""
+    """Lee el Excel y agrega columnas derivadas necesarias."""
     df = pd.read_excel(path_or_buffer)
 
-    # --- Columnas derivadas ---------------------------------------------------
+    # ---- Columnas derivadas --------------------------------------------------
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
 
-    # Cálculo robusto del age en días
+    # Age robusto en días
     today_midnight = pd.Timestamp("today").normalize()
     df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
 
+    # País y código de compañía
     df["Country"]     = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
 
@@ -51,7 +52,7 @@ def load_data(path_or_buffer) -> pd.DataFrame:
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    """Devuelve tabla con métricas por 'Assignment group'."""
+    """Devuelve tabla con métricas por Assignment group (Tower)."""
     agg = df.groupby("Assignment group").agg(
         OPEN_TICKETS=("is_open", "sum"),
         TICKETS_total=("Number", "count"),
@@ -59,21 +60,33 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
         YESTERDAY=("YESTERDAY", "sum"),
         THREE_DAYS=("THREE_DAYS", "sum"),
     ).reset_index()
+
     agg = agg.rename(columns={
         "Assignment group": "TOWER",
         "TICKETS_total": "TICKETS (total)",
-        "THREE_DAYS": "3 DAYS"
+        "THREE_DAYS": "3 DAYS",
     })
+
     return agg.sort_values("TOWER")
 
 
+def safe_rerun():
+    """Rerun compatible con cualquier versión de Streamlit."""
+    if hasattr(st, "rerun"):
+        st.rerun()                 # Streamlit >= 1.25
+    else:
+        st.experimental_rerun()    # Streamlit < 1.25
+
+
 # ------------------------------------------------------------------
-# Estado de sesión
+# Inicialización del estado de sesión
 # ------------------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
+
 if "last_update" not in st.session_state:
     st.session_state.last_update = None
+
 if "data" not in st.session_state:
     default_path = Path(DEFAULT_DATAFILE)
     if default_path.exists():
@@ -83,9 +96,10 @@ if "data" not in st.session_state:
         st.session_state.data = None
 
 # ------------------------------------------------------------------
-# Barra lateral – Filtros
+# Barra lateral: filtros
 # ------------------------------------------------------------------
 st.sidebar.header("Filtros")
+
 if st.session_state.data is not None:
     base_df = st.session_state.data
 
@@ -105,12 +119,12 @@ else:
     df_filtered = pd.DataFrame()
 
 # ------------------------------------------------------------------
-# Cabecera de la página
+# Cabecera
 # ------------------------------------------------------------------
 st.title("📊 Aging Dashboard por Tower")
 
 # ------------------------------------------------------------------
-# Expander para modo Admin y carga de archivo
+# Sección de administración y carga de archivo
 # ------------------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
@@ -125,7 +139,7 @@ with st.expander("🔐 Acceso de administrador"):
             st.session_state.data = load_data(uploaded)
             st.session_state.last_update = dt.datetime.now()
             st.success("Base de datos actualizada correctamente")
-            st.experimental_rerun()
+            safe_rerun()   # recarga la app con los nuevos datos
 
 # ------------------------------------------------------------------
 # Dashboard principal
@@ -143,7 +157,7 @@ else:
     col2.metric("📄 Tickets totales", int(summary["TICKETS (total)"].sum()))
 
 # ------------------------------------------------------------------
-# Footer – Hora de la última carga
+# Footer – última actualización
 # ------------------------------------------------------------------
 st.markdown(
     f"""
