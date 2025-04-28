@@ -1,6 +1,6 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower + Firebase
+# Streamlit dashboard – Aging por Tower + Firebase + Tower filtro
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -21,9 +21,10 @@ st.set_page_config(
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
+ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
 # -----------------------------------------------------------
-# Inicializar Firebase usando secrets correctamente
+# Inicializar Firebase usando secrets
 # -----------------------------------------------------------
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
@@ -133,6 +134,10 @@ if not df.empty:
         df["Country"].isin(sel_country) &
         df["CompanyCode"].isin(sel_company)
     ]
+
+    # 🔥 Nuevo filtro para mostrar solo las Towers MDM, P2P, O2C, R2R
+    df_filtered = df_filtered[df_filtered["Assignment group"].isin(ALLOWED_TOWERS)]
+
 else:
     df_filtered = pd.DataFrame()
 
