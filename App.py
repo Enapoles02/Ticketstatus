@@ -140,9 +140,18 @@ with st.expander("🔐 Administrator Access"):
 # -----------------------------------------------------------
 df, last_update = download_from_firestore()
 
-# Make sure TowerGroup exists even when downloading from Firebase
-if not df.empty and "TowerGroup" not in df.columns:
-    df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+# 🔥 Ensure critical columns always exist
+if not df.empty:
+    if "TowerGroup" not in df.columns:
+        df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+    if "Today" not in df.columns:
+        df["Today"] = df["Age"] == 0
+    if "Yesterday" not in df.columns:
+        df["Yesterday"] = df["Age"] == 1
+    if "2 Days" not in df.columns:
+        df["2 Days"] = df["Age"] == 2
+    if "+3 Days" not in df.columns:
+        df["+3 Days"] = df["Age"] >= 3
 
 # -----------------------------------------------------------
 # Sidebar filters
