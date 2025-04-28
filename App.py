@@ -1,11 +1,10 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower + Firebase (secrets)
+# Streamlit dashboard – Aging por Tower + Firebase (via secrets)
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import datetime as dt
-import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from io import BytesIO
@@ -24,11 +23,10 @@ COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 
 # -----------------------------------------------------------
-# Inicializar Firebase desde secrets
+# Inicializar Firebase usando secrets directamente
 # -----------------------------------------------------------
 if not firebase_admin._apps:
-    firebase_credentials = json.loads(st.secrets["firebase_credentials"])
-    cred = credentials.Certificate(firebase_credentials)
+    cred = credentials.Certificate(st.secrets["firebase_credentials"])
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -68,7 +66,7 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
 
 def upload_to_firestore(df: pd.DataFrame):
     """Sube DataFrame como JSON a Firestore."""
-    data_json = json.loads(df.to_json(orient="records"))
+    data_json = df.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": data_json,
         "last_update": dt.datetime.utcnow()
@@ -94,10 +92,10 @@ if "admin" not in st.session_state:
 # -----------------------------------------------------------
 # Título
 # -----------------------------------------------------------
-st.title("📊 Aging Dashboard por Tower (con Firebase)")
+st.title("📊 Aging Dashboard por Tower (Firebase)")
 
 # -----------------------------------------------------------
-# Acceso Admin para carga
+# Acceso Admin para cargar
 # -----------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
@@ -138,7 +136,7 @@ else:
     df_filtered = pd.DataFrame()
 
 # -----------------------------------------------------------
-# Dashboard
+# Dashboard principal
 # -----------------------------------------------------------
 if df_filtered.empty:
     st.warning("No hay datos disponibles.")
