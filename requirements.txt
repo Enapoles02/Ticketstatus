@@ -1,3 +1,4 @@
 streamlit>=1.33
 pandas>=2.2
-openpyxl>=3.1       
+openpyxl>=3.1
+firebase-admin>=6.3.0
