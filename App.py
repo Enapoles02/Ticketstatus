@@ -44,21 +44,25 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df["Country"] = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
-    df["TODAY"] = df["Age"] == 0
-    df["YESTERDAY"] = df["Age"] == 1
-    df["THREE_DAYS"] = df["Age"] >= 3  # 🔥 Corrected: 3 days or more
+
+    df["Today"] = df["Age"] == 0
+    df["Yesterday"] = df["Age"] == 1
+    df["2 Days"] = df["Age"] == 2
+    df["+3 Days"] = df["Age"] >= 3
+
     pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
+
     return df
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
     agg = df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
-        TOTAL_TICKETS=("Number", "count"),
-        TODAY=("TODAY", "sum"),
-        YESTERDAY=("YESTERDAY", "sum"),
-        THREE_DAYS=("THREE_DAYS", "sum"),
+        Today=("Today", "sum"),
+        Yesterday=("Yesterday", "sum"),
+        **{"2 Days": ("2 Days", "sum")},
+        **{"+3 Days": ("+3 Days", "sum")},
     ).reset_index()
     agg = agg.rename(columns={
         "TowerGroup": "TOWER",
@@ -173,7 +177,7 @@ else:
 
     col1, col2 = st.columns(2)
     col1.metric("🎫 Open Tickets", int(summary["OPEN_TICKETS"].sum()))
-    col2.metric("📄 Total Tickets", int(summary["TOTAL_TICKETS"].sum()))
+    col2.metric("🕑 +3 Days Tickets", int(summary["+3 Days"].sum()))
 
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
