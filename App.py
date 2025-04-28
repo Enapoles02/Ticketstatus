@@ -1,6 +1,6 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower + Firebase + Tower filtro
+# Streamlit dashboard – Aging por Tower extraído de texto
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+import io
 
 st.set_page_config(
     page_title="Aging Dashboard",
@@ -42,6 +43,10 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
     df["Country"] = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
+
+    # 🔥 Nueva columna TowerGroup: extrayendo la segunda palabra de Assignment group
+    df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+
     df["TODAY"] = df["Age"] == 0
     df["YESTERDAY"] = df["Age"] == 1
     df["THREE_DAYS"] = df["Age"].between(2, 3)
@@ -51,7 +56,7 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
 
 
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    agg = df.groupby("Assignment group").agg(
+    agg = df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
         TICKETS_total=("Number", "count"),
         TODAY=("TODAY", "sum"),
@@ -59,7 +64,7 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
         THREE_DAYS=("THREE_DAYS", "sum"),
     ).reset_index()
     agg = agg.rename(columns={
-        "Assignment group": "TOWER",
+        "TowerGroup": "TOWER",
         "TICKETS_total": "TICKETS (total)",
         "THREE_DAYS": "3 DAYS"
     })
@@ -85,16 +90,33 @@ def download_from_firestore() -> (pd.DataFrame, dt.datetime):
     else:
         return pd.DataFrame(), None
 
+def to_excel(df):
+    """Convierte un DataFrame a un archivo Excel en memoria."""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Dashboard")
+    processed_data = output.getvalue()
+    return processed_data
+
 # -----------------------------------------------------------
 # Estado de sesión
 # -----------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
+if "refresh" not in st.session_state:
+    st.session_state.refresh = False
+
 # -----------------------------------------------------------
 # Título
 # -----------------------------------------------------------
 st.title("📊 Aging Dashboard por Tower (Firebase Live)")
+
+# -----------------------------------------------------------
+# Botón de refrescar manual
+# -----------------------------------------------------------
+if st.button("🔄 Refrescar datos Firestore"):
+    st.session_state.refresh = True
 
 # -----------------------------------------------------------
 # Acceso Admin para cargar nuevo archivo
@@ -135,8 +157,8 @@ if not df.empty:
         df["CompanyCode"].isin(sel_company)
     ]
 
-    # 🔥 Nuevo filtro para mostrar solo las Towers MDM, P2P, O2C, R2R
-    df_filtered = df_filtered[df_filtered["Assignment group"].isin(ALLOWED_TOWERS)]
+    # 🔥 Filtro de solo MDM, P2P, O2C, R2R
+    df_filtered = df_filtered[df_filtered["TowerGroup"].isin(ALLOWED_TOWERS)]
 
 else:
     df_filtered = pd.DataFrame()
@@ -149,11 +171,21 @@ if df_filtered.empty:
 else:
     st.subheader("Resumen por Tower")
     summary = summarize(df_filtered)
-    st.dataframe(summary, use_container_width=True, hide_index=True)
 
     col1, col2 = st.columns(2)
     col1.metric("🎫 Tickets abiertos", int(summary["OPEN_TICKETS"].sum()))
     col2.metric("📄 Tickets totales", int(summary["TICKETS (total)"].sum()))
+
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+
+    # 📥 Botón para descargar el resumen filtrado
+    excel_data = to_excel(summary)
+    st.download_button(
+        label="📥 Descargar resumen en Excel",
+        data=excel_data,
+        file_name="Resumen_Aging.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 # -----------------------------------------------------------
 # Footer – Última carga
