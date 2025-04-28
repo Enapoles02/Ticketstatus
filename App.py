@@ -5,9 +5,9 @@
 import streamlit as st
 import pandas as pd
 import datetime as dt
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
-from io import BytesIO
 
 st.set_page_config(
     page_title="Aging Dashboard",
@@ -23,10 +23,11 @@ COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 
 # -----------------------------------------------------------
-# Inicializar Firebase usando secrets directamente
+# Inicializar Firebase usando secrets correctamente
 # -----------------------------------------------------------
 if not firebase_admin._apps:
-    cred = credentials.Certificate(st.secrets["firebase_credentials"])
+    firebase_credentials = json.loads(st.secrets["firebase_credentials"])
+    cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -95,7 +96,7 @@ if "admin" not in st.session_state:
 st.title("📊 Aging Dashboard por Tower (Firebase)")
 
 # -----------------------------------------------------------
-# Acceso Admin para cargar
+# Acceso Admin para cargar nuevo archivo
 # -----------------------------------------------------------
 with st.expander("🔐 Acceso de administrador"):
     if not st.session_state.admin:
