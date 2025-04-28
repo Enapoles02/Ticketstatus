@@ -11,7 +11,7 @@ from firebase_admin import credentials, firestore
 import io
 
 st.set_page_config(
-    page_title="Aging Dashboard",
+    page_title="TICKETS DASHBOARD",
     page_icon="📈",
     layout="wide",
 )
@@ -110,7 +110,7 @@ if "refresh" not in st.session_state:
 # -----------------------------------------------------------
 # Título
 # -----------------------------------------------------------
-st.title("📊 Aging Dashboard por Tower (Firebase Live)")
+st.title("📊 Ticket Dashboard Tower")
 
 # -----------------------------------------------------------
 # Botón de refrescar manual
