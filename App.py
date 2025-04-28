@@ -1,6 +1,6 @@
 # app.py
 # -----------------------------------------------------------
-# Streamlit dashboard – Aging por Tower extraído de texto y Firebase
+# TICKETS DASHBOARD – Streamlit + Firebase
 # -----------------------------------------------------------
 import streamlit as st
 import pandas as pd
@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # -----------------------------------------------------------
-# Constantes
+# Constants
 # -----------------------------------------------------------
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
@@ -25,7 +25,7 @@ DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
 # -----------------------------------------------------------
-# Inicializar Firebase usando secrets
+# Initialize Firebase
 # -----------------------------------------------------------
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
@@ -34,7 +34,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # -----------------------------------------------------------
-# Funciones
+# Functions
 # -----------------------------------------------------------
 def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df = pd.read_excel(uploaded_file)
@@ -43,13 +43,10 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
     df["Age"] = (today_midnight - df["Created"].dt.normalize()).dt.days
     df["Country"] = df["Client Codes Coding"].str[:2]
     df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
-
-    # 🔥 Nueva columna TowerGroup
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
-
     df["TODAY"] = df["Age"] == 0
     df["YESTERDAY"] = df["Age"] == 1
-    df["THREE_DAYS"] = df["Age"].between(2, 3)
+    df["THREE_DAYS"] = df["Age"] >= 3  # 🔥 Corrected: 3 days or more
     pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
     return df
@@ -58,21 +55,19 @@ def load_data_from_excel(uploaded_file) -> pd.DataFrame:
 def summarize(df: pd.DataFrame) -> pd.DataFrame:
     agg = df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
-        TICKETS_total=("Number", "count"),
+        TOTAL_TICKETS=("Number", "count"),
         TODAY=("TODAY", "sum"),
         YESTERDAY=("YESTERDAY", "sum"),
         THREE_DAYS=("THREE_DAYS", "sum"),
     ).reset_index()
     agg = agg.rename(columns={
         "TowerGroup": "TOWER",
-        "TICKETS_total": "TICKETS (total)",
-        "THREE_DAYS": "3 DAYS"
     })
     return agg.sort_values("TOWER")
 
 
 def upload_to_firestore(df: pd.DataFrame):
-    """Sube DataFrame como JSON a Firestore."""
+    """Upload DataFrame as JSON to Firestore."""
     data_json = df.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": data_json,
@@ -81,7 +76,7 @@ def upload_to_firestore(df: pd.DataFrame):
 
 
 def download_from_firestore() -> (pd.DataFrame, dt.datetime):
-    """Descarga DataFrame desde Firestore."""
+    """Download DataFrame from Firestore."""
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
     if doc.exists:
         content = doc.to_dict()
@@ -91,7 +86,7 @@ def download_from_firestore() -> (pd.DataFrame, dt.datetime):
         return pd.DataFrame(), None
 
 def to_excel(df):
-    """Convierte un DataFrame a un archivo Excel en memoria."""
+    """Convert DataFrame to Excel in memory."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Dashboard")
@@ -99,7 +94,7 @@ def to_excel(df):
     return processed_data
 
 # -----------------------------------------------------------
-# Estado de sesión
+# Session state
 # -----------------------------------------------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
@@ -108,96 +103,96 @@ if "refresh" not in st.session_state:
     st.session_state.refresh = False
 
 # -----------------------------------------------------------
-# Título
+# Main Title
 # -----------------------------------------------------------
-st.title("📊 Ticket Dashboard Tower")
+st.title("📈 Tickets Aging Dashboard")
 
 # -----------------------------------------------------------
-# Botón de refrescar manual
+# Refresh button
 # -----------------------------------------------------------
-if st.button("🔄 Refrescar datos Firestore"):
+if st.button("🔄 Refresh Firestore Data"):
     st.session_state.refresh = True
 
 # -----------------------------------------------------------
-# Acceso Admin para cargar nuevo archivo
+# Admin access to upload files
 # -----------------------------------------------------------
-with st.expander("🔐 Acceso de administrador"):
+with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
-        pwd = st.text_input("Introduce código ADMIN para habilitar carga", type="password")
+        pwd = st.text_input("Enter ADMIN Code to enable uploading", type="password")
         if pwd == ADMIN_CODE:
             st.session_state.admin = True
-            st.success("Modo admin habilitado ✅")
+            st.success("Admin mode enabled ✅")
     else:
-        st.info("Modo admin activo")
-        uploaded = st.file_uploader("Cargar nuevo archivo Excel", type=["xls", "xlsx"])
+        st.info("Admin mode active")
+        uploaded = st.file_uploader("Upload a new Excel file", type=["xls", "xlsx"])
         if uploaded:
             df_new = load_data_from_excel(uploaded)
             upload_to_firestore(df_new)
-            st.success("Base de datos subida exitosamente 🔥")
+            st.success("Database successfully updated 🔥")
             st.rerun()
 
 # -----------------------------------------------------------
-# Leer data desde Firebase
+# Load data from Firestore
 # -----------------------------------------------------------
 df, last_update = download_from_firestore()
 
-# 🔥 Asegurarnos que siempre exista TowerGroup aunque venga de Firebase
+# Make sure TowerGroup exists even when downloading from Firebase
 if not df.empty and "TowerGroup" not in df.columns:
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
 
 # -----------------------------------------------------------
-# Sidebar – Filtros
+# Sidebar filters
 # -----------------------------------------------------------
 if not df.empty:
-    st.sidebar.header("Filtros")
+    st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
 
-    sel_country = st.sidebar.multiselect("País (CA / US)", countries, default=countries)
-    sel_company = st.sidebar.multiselect("Compañía (últimos 4 dígitos)", companies, default=companies)
+    sel_country = st.sidebar.multiselect("Country (CA / US)", countries, default=countries)
+    sel_company = st.sidebar.multiselect("Company Code (Last 4 digits)", companies, default=companies)
 
     df_filtered = df[
         df["Country"].isin(sel_country) &
         df["CompanyCode"].isin(sel_company)
     ]
 
-    # 🔥 Filtro de solo MDM, P2P, O2C, R2R
+    # Filter to only allowed Towers
     df_filtered = df_filtered[df_filtered["TowerGroup"].isin(ALLOWED_TOWERS)]
 
 else:
     df_filtered = pd.DataFrame()
 
 # -----------------------------------------------------------
-# Dashboard principal
+# Main dashboard
 # -----------------------------------------------------------
 if df_filtered.empty:
-    st.warning("No hay datos disponibles aún. Sube un archivo.")
+    st.warning("No available data. Please upload a file.")
 else:
-    st.subheader("Resumen por Tower")
+    st.subheader("Summary by Tower")
     summary = summarize(df_filtered)
 
     col1, col2 = st.columns(2)
-    col1.metric("🎫 Tickets abiertos", int(summary["OPEN_TICKETS"].sum()))
-    col2.metric("📄 Tickets totales", int(summary["TICKETS (total)"].sum()))
+    col1.metric("🎫 Open Tickets", int(summary["OPEN_TICKETS"].sum()))
+    col2.metric("📄 Total Tickets", int(summary["TOTAL_TICKETS"].sum()))
 
     st.dataframe(summary, use_container_width=True, hide_index=True)
 
-    # 📥 Botón para descargar el resumen filtrado
+    # 📥 Download button
     excel_data = to_excel(summary)
     st.download_button(
-        label="📥 Descargar resumen en Excel",
+        label="📥 Download Summary in Excel",
         data=excel_data,
-        file_name="Resumen_Aging.xlsx",
+        file_name="Tickets_Summary.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 # -----------------------------------------------------------
-# Footer – Última carga
+# Footer with last update
 # -----------------------------------------------------------
 st.markdown(
     f"""
-    <div style="position:fixed; bottom:0; left:0; padding:6px 12px; font-size:0.8rem; color:#666;">
-        Última actualización:&nbsp;
+    <div style="position:fixed; bottom:0; left:0; padding:6px 12px; font-size:0.75rem; color:#aaa;">
+        Last update:&nbsp;
         <strong>{last_update.strftime('%Y-%m-%d %H:%M:%S') if last_update else '–'}</strong>
     </div>
     """,
