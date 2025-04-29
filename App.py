@@ -14,7 +14,6 @@ COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# Firebase initialization
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
@@ -40,7 +39,7 @@ def load_data_from_excel(uploaded_file):
         if created_col:
             df["Created"] = pd.to_datetime(
                 df[created_col[0]],
-                format="%m/%d/%Y %I:%M:%S %p",  # Forzar formato típico
+                format="%m/%d/%Y %I:%M:%S %p",
                 errors="coerce"
             ).dt.normalize()
         elif "Opened" in df.columns:
@@ -174,10 +173,6 @@ if not df.empty:
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
 
-    # DEPURACIÓN
-    st.subheader("🕵️‍♂️ Raw Aging Sample")
-    st.dataframe(df_graph[["Created", "Age"]].head(10))
-
     if not df_graph.empty:
         st.subheader("📊 KPIs")
         total_open = int(df_graph["is_open"].sum())
@@ -197,6 +192,7 @@ if not df.empty:
         col1, col2 = st.columns(2)
         with col1:
             if summary_filtered["OPEN_TICKETS"].sum() > 0:
+                st.markdown("**🔵 Open Tickets Distribution by Tower**")
                 fig1, ax1 = plt.subplots()
                 ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
                 ax1.axis('equal')
@@ -206,6 +202,7 @@ if not df.empty:
 
         with col2:
             if summary_filtered["+3 Days"].sum() > 0:
+                st.markdown("**🟠 Tickets Aged +3 Days by Tower**")
                 fig2, ax2 = plt.subplots()
                 ax2.pie(summary_filtered["+3 Days"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
                 ax2.axis('equal')
