@@ -11,15 +11,16 @@ st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wid
 
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
-DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
+# Initialize Firebase
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
+# ========== Helpers ==========
 def safe_age(created_date):
     try:
         if pd.isna(created_date):
@@ -74,18 +75,35 @@ def clean_for_firestore(df):
 
 def upload_to_firestore(df):
     df_clean = clean_for_firestore(df)
-    data_json = df_clean.to_dict(orient="records")
-    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
-        "data": data_json,
+    collection_ref = db.collection(COLLECTION_NAME)
+
+    # Borrar datos previos (excepto meta)
+    docs = collection_ref.stream()
+    for doc in docs:
+        if doc.id != "meta":
+            doc.reference.delete()
+
+    # Subir por filas
+    for i, record in enumerate(df_clean.to_dict(orient="records")):
+        collection_ref.document(f"row_{i}").set(record)
+
+    # Guardar timestamp
+    collection_ref.document("meta").set({
         "last_update": dt.datetime.utcnow()
     })
 
 def download_from_firestore():
-    doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
-    if doc.exists:
-        content = doc.to_dict()
-        return pd.DataFrame(content["data"]), content.get("last_update")
-    return pd.DataFrame(), None
+    collection_ref = db.collection(COLLECTION_NAME)
+    docs = collection_ref.stream()
+
+    rows = []
+    last_update = None
+    for doc in docs:
+        if doc.id == "meta":
+            last_update = doc.to_dict().get("last_update")
+        else:
+            rows.append(doc.to_dict())
+    return pd.DataFrame(rows), last_update
 
 def to_excel(df):
     df_safe = df.copy()
@@ -98,11 +116,13 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
+# ========== Estado inicial ==========
 if "admin" not in st.session_state:
     st.session_state.admin = False
 if "db_updated" not in st.session_state:
     st.session_state.db_updated = False
 
+# ========== Interfaz ==========
 st.title("📈 Tickets Aging Dashboard")
 
 with st.expander("🔐 Administrator Access"):
@@ -127,6 +147,7 @@ if st.session_state.db_updated:
     st.session_state.db_updated = False
     st.experimental_rerun()
 
+# ========== Carga y filtros ==========
 df, last_update = download_from_firestore()
 
 if not df.empty:
