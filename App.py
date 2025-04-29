@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import datetime as dt
@@ -9,18 +10,17 @@ import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
 
-# 🚀 Firebase Setup
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
+# Inicializar Firebase
 if not firebase_admin._apps:
-    firebase_credentials = dict(st.secrets["firebase_credentials"])
-    firebase_credentials["private_key"] = firebase_credentials["private_key"].replace("\\n", "\n")
+    raw_secrets = st.secrets["firebase_credentials"]
+    firebase_credentials = {k: v for k, v in raw_secrets.items()}
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
-
 db = firestore.client()
 
 def safe_age(created_date):
@@ -44,6 +44,16 @@ def load_data_from_excel(uploaded_file):
         st.warning("No 'Created' column found.")
     df["Age"] = df["Created"].apply(safe_age)
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+
+    # Derivar Country y CompanyCode desde 'Client Codes Coding'
+    if "Client Codes Coding" in df.columns:
+        df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
+        df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
+    else:
+        df["Country"] = None
+        df["CompanyCode"] = None
+        st.warning("⚠️ 'Client Codes Coding' column is missing. 'Country' and 'CompanyCode' not derived.")
+
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
@@ -99,11 +109,9 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# 🧠 Estado inicial
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
-# 🖥️ Interfaz principal
 st.title("📈 Tickets Aging Dashboard")
 refresh = st.button("🔄 Refresh Database")
 
@@ -126,7 +134,6 @@ if refresh:
 
 df, last_update = download_from_firestore()
 
-# ✅ Interfaz de análisis
 if not df.empty:
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     df["Age"] = df["Created"].apply(safe_age)
@@ -136,6 +143,9 @@ if not df.empty:
     df["+3 Days"] = df["Age"] >= 3
     if "TowerGroup" not in df.columns:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+    if "Country" not in df.columns and "Client Codes Coding" in df.columns:
+        df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
+        df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
