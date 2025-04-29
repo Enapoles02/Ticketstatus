@@ -79,38 +79,44 @@ def summarize(df):
 def upload_to_firestore(df):
     df_clean = df.copy()
 
-    # Formatear columnas datetime como string
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-    # Reemplazar NaN con None
     df_clean = df_clean.where(pd.notnull(df_clean), None)
 
-    # Eliminar columnas no serializables
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(columns=[col], inplace=True)
             st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
 
     try:
-        # Eliminar colección anterior si existe (opcional)
+        total_rows = df_clean.shape[0]
+        progress_bar = st.progress(0, text="Uploading to Firestore...")
+        status_text = st.empty()
+
+        # (Opcional) Borrar documentos existentes
         docs = db.collection(COLLECTION_NAME).stream()
         for doc in docs:
             doc.reference.delete()
 
-        # Guardar cada fila como un documento separado
+        # Subir cada fila como documento individual
         for i, row in df_clean.iterrows():
             doc_id = f"ticket_{i}"
             db.collection(COLLECTION_NAME).document(doc_id).set(row.to_dict())
+            if i % 10 == 0 or i == total_rows - 1:
+                progress_bar.progress(int((i + 1) / total_rows * 100), text=f"Uploaded {i + 1}/{total_rows}")
 
         # Guardar metadata
         db.collection(COLLECTION_NAME).document("meta_info").set({
             "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         })
 
-        st.success("✅ Data uploaded in multiple documents successfully.")
+        progress_bar.empty()
+        status_text.success("✅ All rows uploaded to Firestore successfully!")
+
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
+
 
 
 def download_from_firestore():
