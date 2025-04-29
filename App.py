@@ -118,7 +118,10 @@ df, last_update = download_from_firestore()
 
 if not df.empty:
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-    df["Age"] = df["Created"].apply(lambda x: (pd.Timestamp("today").normalize() - x.normalize()).days if pd.notna(x) else None)
+   today = pd.Timestamp("today").normalize()
+df["Age"] = df["Created"].apply(
+    lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
+)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
