@@ -52,7 +52,7 @@ def load_data_from_excel(uploaded_file):
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned"].isna() | (df["Assigned"].astype(str).str.strip() == "")
+    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
     return df
 
