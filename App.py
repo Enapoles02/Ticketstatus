@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import datetime as dt
@@ -12,13 +11,12 @@ st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wid
 
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
-DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# Inicializar Firebase
+# Firebase Init
 if not firebase_admin._apps:
-    raw_secrets = st.secrets["firebase_credentials"]
-    firebase_credentials = {k: v for k, v in raw_secrets.items()}
+    raw_credentials = st.secrets["firebase_credentials"]
+    firebase_credentials = json.loads(json.dumps(dict(raw_credentials)))
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
@@ -44,16 +42,6 @@ def load_data_from_excel(uploaded_file):
         st.warning("No 'Created' column found.")
     df["Age"] = df["Created"].apply(safe_age)
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
-
-    # Derivar Country y CompanyCode desde 'Client Codes Coding'
-    if "Client Codes Coding" in df.columns:
-        df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
-        df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
-    else:
-        df["Country"] = None
-        df["CompanyCode"] = None
-        st.warning("⚠️ 'Client Codes Coding' column is missing. 'Country' and 'CompanyCode' not derived.")
-
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
@@ -65,6 +53,11 @@ def load_data_from_excel(uploaded_file):
         df["Is_Unassigned"] = False
         st.warning("⚠️ Column 'Assigned to' not found. Skipping unassigned logic.")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
+
+    # Extraer country y company
+    if "Client codes coding" in df.columns:
+        df["Country"] = df["Client codes coding"].astype(str).str[:2]
+        df["CompanyCode"] = df["Client codes coding"].astype(str).str[-4:]
     return df
 
 def summarize(df):
@@ -76,9 +69,8 @@ def summarize(df):
         **{"+3 Days": ("+3 Days", "sum")}
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
-def upload_to_firestore(df, chunk_size=100):
+def upload_to_firestore(df, batch_size=500):
     df_clean = df.copy()
-
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_clean = df_clean.where(pd.notnull(df_clean), None)
@@ -87,47 +79,46 @@ def upload_to_firestore(df, chunk_size=100):
             df_clean.drop(columns=[col], inplace=True)
             st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
 
-    total_rows = df_clean.shape[0]
-    num_chunks = (total_rows + chunk_size - 1) // chunk_size
+    total_rows = len(df_clean)
+    total_batches = (total_rows + batch_size - 1) // batch_size
 
-    progress_bar = st.progress(0, text="Uploading chunks to Firestore...")
+    progress_bar = st.progress(0, text="Uploading batches to Firestore...")
     status_text = st.empty()
 
     try:
-        # Limpia documentos previos
-        docs = db.collection(COLLECTION_NAME).stream()
-        for doc in docs:
+        for doc in db.collection(COLLECTION_NAME).stream():
             doc.reference.delete()
 
-        for i in range(num_chunks):
-            chunk_df = df_clean.iloc[i * chunk_size : (i + 1) * chunk_size]
-            doc_id = f"chunk_{i}"
-            db.collection(COLLECTION_NAME).document(doc_id).set({
-                "rows": chunk_df.to_dict(orient="records")
-            })
-            progress = int((i + 1) / num_chunks * 100)
-            progress_bar.progress(progress, text=f"Uploaded chunk {i + 1}/{num_chunks}")
+        for i in range(total_batches):
+            batch_df = df_clean.iloc[i * batch_size : (i + 1) * batch_size]
+            db.collection(COLLECTION_NAME).document(f"batch_{i}").set({"rows": batch_df.to_dict(orient="records")})
+            progress_bar.progress((i + 1) / total_batches, text=f"Uploaded batch {i + 1}/{total_batches}")
 
         db.collection(COLLECTION_NAME).document("meta_info").set({
             "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
-            "chunks": num_chunks,
-            "rows_total": total_rows
+            "total_batches": total_batches,
+            "total_rows": total_rows
         })
-
         progress_bar.empty()
-        status_text.success("✅ Data uploaded in chunks successfully!")
-
+        status_text.success("✅ All batches uploaded successfully!")
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
 
-
-
 def download_from_firestore():
-    doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
-    if doc.exists:
-        content = doc.to_dict()
-        return pd.DataFrame(content["data"]), content.get("last_update")
-    return pd.DataFrame(), None
+    meta_doc = db.collection(COLLECTION_NAME).document("meta_info").get()
+    if not meta_doc.exists:
+        return pd.DataFrame(), None
+    meta_info = meta_doc.to_dict()
+    total_batches = meta_info.get("total_batches", 0)
+    last_update = meta_info.get("last_update")
+
+    all_rows = []
+    for i in range(total_batches):
+        batch_doc = db.collection(COLLECTION_NAME).document(f"batch_{i}").get()
+        if batch_doc.exists:
+            all_rows.extend(batch_doc.to_dict().get("rows", []))
+
+    return pd.DataFrame(all_rows), last_update
 
 def to_excel(df):
     df_safe = df.copy()
@@ -174,9 +165,6 @@ if not df.empty:
     df["+3 Days"] = df["Age"] >= 3
     if "TowerGroup" not in df.columns:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
-    if "Country" not in df.columns and "Client Codes Coding" in df.columns:
-        df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
-        df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
@@ -194,7 +182,6 @@ if not df.empty:
     ]
 
     summary = summarize(df_filtered)
-    st.sidebar.header("Graph Filters")
     sel_towers = st.sidebar.multiselect("Select Towers", summary["TOWER"].unique(), default=summary["TOWER"].unique())
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
@@ -267,7 +254,7 @@ if not df.empty:
 footer_text = f"""
     <div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
     padding:6px; font-size:0.75rem; color:#888; background-color:#f8f8f8;">
-    Last update: {str(last_update) if last_update else "–"}
+    Last update: {last_update if last_update else "–"}
     </div>
 """
 st.markdown(footer_text, unsafe_allow_html=True)
