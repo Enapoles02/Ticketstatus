@@ -56,14 +56,15 @@ def summarize(df):
         **{"+3 Days": ("+3 Days", "sum")},
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
+def clean_for_firestore(df):
+    df_clean = df.copy()
+    for col in df_clean.select_dtypes(include=["datetime", "datetimetz"]).columns:
+        df_clean[col] = df_clean[col].apply(lambda x: x if pd.notna(x) else None)
+    return df_clean
+
 def upload_to_firestore(df):
-    df = df.copy()
-    for col in df.columns:
-        if "date" in col.lower() or "created" in col.lower():
-            df[col] = pd.to_datetime(df[col], errors="coerce")
-    for col in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
-        df[col] = df[col].where(df[col].notna(), None)
-    data_json = df.to_dict(orient="records")
+    df_clean = clean_for_firestore(df)
+    data_json = df_clean.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": data_json,
         "last_update": dt.datetime.utcnow()
@@ -87,6 +88,8 @@ if "admin" not in st.session_state:
 
 st.title("📈 Tickets Aging Dashboard")
 
+refresh = st.button("🔄 Refresh Database")
+
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
         pwd = st.text_input("Enter ADMIN Code", type="password")
@@ -100,6 +103,9 @@ with st.expander("🔐 Administrator Access"):
             upload_to_firestore(df_new)
             st.success("Database updated successfully ✅")
             st.rerun()
+
+if refresh:
+    st.experimental_rerun()
 
 df, last_update = download_from_firestore()
 
