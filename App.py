@@ -25,7 +25,9 @@ def safe_age(created_date):
     try:
         if pd.isna(created_date):
             return None
-        return (pd.Timestamp("today").normalize() - pd.to_datetime(created_date).normalize()).days
+        created = pd.to_datetime(created_date).tz_localize(None)
+        today = pd.Timestamp("today").normalize()
+        return (today - created.normalize()).days
     except Exception:
         return None
 
@@ -38,7 +40,7 @@ def load_data_from_excel(uploaded_file):
         if created_col:
             df["Created"] = pd.to_datetime(
                 df[created_col[0]],
-                format="%m/%d/%Y %I:%M:%S %p",  # Forzar formato: 4/14/2025 11:37:19 AM
+                format="%m/%d/%Y %I:%M:%S %p",  # Forzar formato típico
                 errors="coerce"
             ).dt.normalize()
         elif "Opened" in df.columns:
@@ -141,7 +143,7 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
-    df["Created"] = pd.to_datetime(df["Created"], errors="coerce").dt.normalize()
+    df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
@@ -172,7 +174,7 @@ if not df.empty:
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
 
-    # DEPURACIÓN: Ver las fechas y edades que se están usando
+    # DEPURACIÓN
     st.subheader("🕵️‍♂️ Raw Aging Sample")
     st.dataframe(df_graph[["Created", "Age"]].head(10))
 
