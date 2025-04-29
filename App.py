@@ -35,9 +35,9 @@ def load_data_from_excel(uploaded_file):
 
     created_col = [col for col in df.columns if "created" in col.lower()]
     if created_col:
-        df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce")
+        df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize()
     elif "Opened" in df.columns:
-        df["Created"] = pd.to_datetime(df["Opened"], errors="coerce")
+        df["Created"] = pd.to_datetime(df["Opened"], errors="coerce").dt.normalize()
     else:
         df["Created"] = pd.NaT
         st.warning("No column found containing 'Created' or 'Opened'. Aging cannot be calculated.")
@@ -134,7 +134,7 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
-    df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
+    df["Created"] = pd.to_datetime(df["Created"], errors="coerce").dt.normalize()
     df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
