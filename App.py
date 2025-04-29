@@ -211,16 +211,14 @@ if not df.empty:
                 st.warning("No data for +3 Days chart.")
 
         st.subheader("📋 Status Overview by Tower")
-pivot_status = df_graph.pivot_table(
-    index="State",
-    columns="TowerGroup",
-    values="Created",  # Puedes usar cualquier columna como conteo
-    aggfunc="count",
-    fill_value=0
-).astype(int)
-
-st.dataframe(pivot_status, use_container_width=True)
-
+        pivot_status = df_graph.pivot_table(
+            index="State",
+            columns="TowerGroup",
+            values="Created",
+            aggfunc="count",
+            fill_value=0
+        ).astype(int)
+        st.dataframe(pivot_status, use_container_width=True)
 
         st.subheader("📥 Download Full Data")
         st.download_button(
