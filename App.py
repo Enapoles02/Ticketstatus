@@ -11,16 +11,15 @@ st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wid
 
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
+DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# Initialize Firebase
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# ========== Helpers ==========
 def safe_age(created_date):
     try:
         if pd.isna(created_date):
@@ -67,43 +66,30 @@ def summarize(df):
 def clean_for_firestore(df):
     df_clean = df.copy()
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz"]).columns:
-        df_clean[col] = df_clean[col].apply(lambda x: x.replace(tzinfo=None) if pd.notna(x) else None)
-    for col in df_clean.columns:
-        df_clean[col] = df_clean[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set, complex)) else x)
-        df_clean[col] = df_clean[col].where(pd.notna(df_clean[col]), None)
+        df_clean[col] = df_clean[col].apply(lambda x: x if pd.notna(x) else None)
     return df_clean
 
 def upload_to_firestore(df):
-    df_clean = clean_for_firestore(df)
-    collection_ref = db.collection(COLLECTION_NAME)
-
-    # Borrar datos previos (excepto meta)
-    docs = collection_ref.stream()
-    for doc in docs:
-        if doc.id != "meta":
-            doc.reference.delete()
-
-    # Subir por filas
-    for i, record in enumerate(df_clean.to_dict(orient="records")):
-        collection_ref.document(f"row_{i}").set(record)
-
-    # Guardar timestamp
-    collection_ref.document("meta").set({
-        "last_update": dt.datetime.utcnow()
+    df_clean = df.copy()
+    for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
+        df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+    df_clean = df_clean.where(pd.notnull(df_clean), None)
+    for col in df_clean.columns:
+        if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
+            df_clean.drop(columns=[col], inplace=True)
+            st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
+    data_json = df_clean.to_dict(orient="records")
+    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
+        "data": data_json,
+        "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     })
 
 def download_from_firestore():
-    collection_ref = db.collection(COLLECTION_NAME)
-    docs = collection_ref.stream()
-
-    rows = []
-    last_update = None
-    for doc in docs:
-        if doc.id == "meta":
-            last_update = doc.to_dict().get("last_update")
-        else:
-            rows.append(doc.to_dict())
-    return pd.DataFrame(rows), last_update
+    doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
+    if doc.exists:
+        content = doc.to_dict()
+        return pd.DataFrame(content["data"]), content.get("last_update")
+    return pd.DataFrame(), None
 
 def to_excel(df):
     df_safe = df.copy()
@@ -116,14 +102,11 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# ========== Estado inicial ==========
 if "admin" not in st.session_state:
     st.session_state.admin = False
-if "db_updated" not in st.session_state:
-    st.session_state.db_updated = False
 
-# ========== Interfaz ==========
 st.title("📈 Tickets Aging Dashboard")
+refresh = st.button("🔄 Refresh Database")
 
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
@@ -134,20 +117,14 @@ with st.expander("🔐 Administrator Access"):
     else:
         uploaded = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
         if uploaded:
-            with st.spinner("Uploading and refreshing database..."):
-                df_new = load_data_from_excel(uploaded)
-                upload_to_firestore(df_new)
-                st.session_state.db_updated = True
-                st.success("Database updated successfully ✅")
+            df_new = load_data_from_excel(uploaded)
+            upload_to_firestore(df_new)
+            st.success("Database updated successfully ✅")
+            st.rerun()
 
-if st.button("🔄 Refresh Database"):
-    st.session_state.db_updated = True
+if refresh:
+    st.rerun()
 
-if st.session_state.db_updated:
-    st.session_state.db_updated = False
-    st.experimental_rerun()
-
-# ========== Carga y filtros ==========
 df, last_update = download_from_firestore()
 
 if not df.empty:
@@ -199,14 +176,14 @@ if not df.empty:
             st.markdown("**🔵 Open Tickets Distribution by Tower**")
             fig1, ax1 = plt.subplots()
             ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
-            ax1.axis("equal")
+            ax1.axis('equal')
             st.pyplot(fig1)
 
         with col2:
             st.markdown("**🟠 Tickets Aged +3 Days by Tower**")
             fig2, ax2 = plt.subplots()
             ax2.pie(summary_filtered["+3 Days"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
-            ax2.axis("equal")
+            ax2.axis('equal')
             st.pyplot(fig2)
 
         st.subheader("📋 Status Overview by Tower")
@@ -214,12 +191,7 @@ if not df.empty:
         st.dataframe(pivot_status, use_container_width=True)
 
         st.subheader("📥 Download Full Data")
-        st.download_button(
-            "Download Filtered DB",
-            data=to_excel(df_graph),
-            file_name="Filtered_Tickets.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button("Download Filtered DB", data=to_excel(df_graph), file_name="Filtered_Tickets.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.subheader("👁️ Ticket Drilldown")
         selected_tower = st.selectbox("Select a Tower", df_graph["TowerGroup"].unique())
@@ -228,22 +200,13 @@ if not df.empty:
         if filter_state:
             df_tower = df_tower[df_tower["State"].isin(filter_state)]
         st.dataframe(df_tower, use_container_width=True)
-        st.download_button(
-            "Download Drilldown Tickets",
-            data=to_excel(df_tower),
-            file_name=f"Tickets_{selected_tower}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button("Download Drilldown Tickets", data=to_excel(df_tower), file_name=f"Tickets_{selected_tower}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
         st.subheader("📋 Unassigned Tickets Overview")
         df_unassigned = df_graph[df_graph["Is_Unassigned"]].copy()
         if not df_unassigned.empty:
             df_unassigned = df_unassigned.sort_values("Unassigned_Age", ascending=False)
-            st.dataframe(
-                df_unassigned[["Number", "Short description", "Created", "Age", "Unassigned_Age"]],
-                use_container_width=True,
-                hide_index=True
-            )
+            st.dataframe(df_unassigned[["Number", "Short description", "Created", "Age", "Unassigned_Age"]], use_container_width=True, hide_index=True)
             overdue_unassigned = df_unassigned[df_unassigned["Unassigned_Age"] > 3].shape[0]
             if overdue_unassigned > 0:
                 st.error(f"⚠️ {overdue_unassigned} tickets have been unassigned for more than 3 days! Immediate action required.")
@@ -256,12 +219,7 @@ if not df.empty:
             if filter_state_unassigned:
                 df_unassigned = df_unassigned[df_unassigned["State"].isin(filter_state_unassigned)]
             st.dataframe(df_unassigned, use_container_width=True)
-            st.download_button(
-                "Download Unassigned Tickets",
-                data=to_excel(df_unassigned),
-                file_name="Unassigned_Tickets.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+            st.download_button("Download Unassigned Tickets", data=to_excel(df_unassigned), file_name="Unassigned_Tickets.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.warning("No data available for selected filters.")
 
