@@ -221,7 +221,6 @@ pivot_status = df_graph.pivot_table(
 
 st.dataframe(pivot_status, use_container_width=True)
 
-
         st.subheader("📥 Download Full Data")
         st.download_button(
             label="Download Filtered DB",
