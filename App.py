@@ -79,11 +79,11 @@ def summarize(df):
 def upload_to_firestore(df):
     df_clean = df.copy()
 
-    # Convertir columnas datetime a string
+    # Formatear columnas datetime como string
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
 
-    # Reemplazar NaN/NaT por None
+    # Reemplazar NaN con None
     df_clean = df_clean.where(pd.notnull(df_clean), None)
 
     # Eliminar columnas no serializables
@@ -93,15 +93,25 @@ def upload_to_firestore(df):
             st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
 
     try:
-        # Convertir a diccionario y subir
-        data_json = df_clean.to_dict(orient="records")
-        db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
-            "data": data_json,
+        # Eliminar colección anterior si existe (opcional)
+        docs = db.collection(COLLECTION_NAME).stream()
+        for doc in docs:
+            doc.reference.delete()
+
+        # Guardar cada fila como un documento separado
+        for i, row in df_clean.iterrows():
+            doc_id = f"ticket_{i}"
+            db.collection(COLLECTION_NAME).document(doc_id).set(row.to_dict())
+
+        # Guardar metadata
+        db.collection(COLLECTION_NAME).document("meta_info").set({
             "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
         })
-        st.success("✅ Data uploaded to Firestore successfully.")
+
+        st.success("✅ Data uploaded in multiple documents successfully.")
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
+
 
 def download_from_firestore():
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
