@@ -66,7 +66,10 @@ def summarize(df):
 def clean_for_firestore(df):
     df_clean = df.copy()
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz"]).columns:
-        df_clean[col] = df_clean[col].apply(lambda x: x if pd.notna(x) else None)
+        df_clean[col] = df_clean[col].apply(lambda x: x.replace(tzinfo=None) if pd.notna(x) else None)
+    for col in df_clean.columns:
+        df_clean[col] = df_clean[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set, complex)) else x)
+        df_clean[col] = df_clean[col].where(pd.notna(df_clean[col]), None)
     return df_clean
 
 def upload_to_firestore(df):
@@ -95,7 +98,6 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# ================== UI =======================
 if "admin" not in st.session_state:
     st.session_state.admin = False
 if "db_updated" not in st.session_state:
