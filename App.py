@@ -31,8 +31,6 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    
-    # Limpieza de encabezados
     df.columns = df.columns.str.strip()
 
     created_col = [col for col in df.columns if "created" in col.lower()]
@@ -95,6 +93,12 @@ def download_from_firestore():
 
 def to_excel(df):
     df_safe = df.copy()
+
+    # Quitar zonas horarias si existen
+    for col in df_safe.select_dtypes(include=["datetimetz"]).columns:
+        df_safe[col] = df_safe[col].dt.tz_localize(None)
+
+    # Convertir valores no exportables
     for col in df_safe.columns:
         df_safe[col] = df_safe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set)) else x)
 
@@ -103,7 +107,6 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# Estado inicial
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -111,7 +114,6 @@ st.title("📈 Tickets Aging Dashboard")
 
 refresh = st.button("🔄 Refresh Database")
 
-# Modo administrador
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
         pwd = st.text_input("Enter ADMIN Code", type="password")
@@ -142,7 +144,6 @@ if not df.empty:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 
-    # Filtros
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
