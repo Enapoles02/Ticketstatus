@@ -234,13 +234,10 @@ if not df.empty:
     else:
         st.warning("No data available for selected filters.")
 
-footer = f"Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}" if last_update else "Last update: –"
-st.markdown(
-    f\"\"\"
+footer_text = f"""
     <div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
     padding:6px; font-size:0.75rem; color:#888; background-color:#f8f8f8;">
-    {footer}
+    Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S') if last_update else "–"}
     </div>
-    \"\"\",
-    unsafe_allow_html=True
-)
+"""
+st.markdown(footer_text, unsafe_allow_html=True)
