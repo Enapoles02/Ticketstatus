@@ -7,23 +7,19 @@ from firebase_admin import credentials, firestore
 import io
 import matplotlib.pyplot as plt
 
-# Configuración de página
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
 
-# Constantes
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# Inicializar Firebase
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Función robusta para calcular Age
 def safe_age(created_date):
     try:
         if pd.isna(created_date):
@@ -32,25 +28,21 @@ def safe_age(created_date):
     except Exception:
         return None
 
-# Funciones
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     df["Age"] = df["Created"].apply(safe_age)
-
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].str[:2]
         df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
     else:
         df["Country"] = ""
         df["CompanyCode"] = ""
-
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
-
     pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
     return df
@@ -71,7 +63,6 @@ def upload_to_firestore(df):
             df[col] = pd.to_datetime(df[col], errors="coerce")
     for col in df.select_dtypes(include=["datetime", "datetimetz"]).columns:
         df[col] = df[col].where(df[col].notna(), None)
-
     data_json = df.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": data_json,
@@ -91,7 +82,6 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# --- Administrador
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -111,7 +101,6 @@ with st.expander("🔐 Administrator Access"):
             st.success("Database updated successfully ✅")
             st.rerun()
 
-# --- Cargar datos
 df, last_update = download_from_firestore()
 
 if not df.empty:
@@ -125,7 +114,6 @@ if not df.empty:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 
-    # Filtros Sidebar
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
@@ -157,7 +145,6 @@ if not df.empty:
         kpi1.metric("🎫 Open Tickets", total_open)
         kpi2.metric("🕑 +3 Days", total_plus3)
         kpi3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
-
         if percent_overdue > 30:
             st.warning("⚠️ High Overdue Rate! Please check aging tickets.")
 
@@ -166,25 +153,29 @@ if not df.empty:
 
         col1, col2 = st.columns(2)
         with col1:
-            st.caption("Open Tickets by Tower")
-            fig1, ax1 = plt.subplots()
-            ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
-            ax1.axis('equal')
-            st.pyplot(fig1)
+            if summary_filtered["OPEN_TICKETS"].sum() > 0:
+                fig1, ax1 = plt.subplots()
+                ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
+                ax1.axis('equal')
+                st.pyplot(fig1)
+            else:
+                st.warning("No data for Open Tickets chart.")
 
         with col2:
-            st.caption("+3 Days by Tower")
-            fig2, ax2 = plt.subplots()
-            ax2.pie(summary_filtered["+3 Days"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
-            ax2.axis('equal')
-            st.pyplot(fig2)
+            if summary_filtered["+3 Days"].sum() > 0:
+                fig2, ax2 = plt.subplots()
+                ax2.pie(summary_filtered["+3 Days"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
+                ax2.axis('equal')
+                st.pyplot(fig2)
+            else:
+                st.warning("No data for +3 Days chart.")
 
         st.subheader("📋 Status Overview")
         status_summary = df_graph["State"].value_counts().reset_index()
         status_summary.columns = ["Status", "Count"]
         st.dataframe(status_summary, use_container_width=True, hide_index=True)
 
-        st.subheader("📥 Download Data")
+        st.subheader("📥 Download Full Data")
         st.download_button(
             label="Download Filtered DB",
             data=to_excel(df_graph),
@@ -201,13 +192,19 @@ if not df.empty:
                 df_tower = df_tower[df_tower["State"].isin(filter_state)]
             st.dataframe(df_tower, use_container_width=True)
 
+            st.download_button(
+                label="Download Drilldown Tickets",
+                data=to_excel(df_tower),
+                file_name=f"Tickets_{selected_tower}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
         st.subheader("📅 Last Ticket Created")
         last_created = df_graph["Created"].max()
         st.info(f"Last Ticket Date: {last_created.strftime('%Y-%m-%d') if pd.notna(last_created) else '–'}")
     else:
         st.warning("No data available for selected filters.")
 
-# Footer
 footer = f"Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}" if last_update else "Last update: –"
 st.markdown(
     f"""
