@@ -7,29 +7,36 @@ from firebase_admin import credentials, firestore
 import io
 import matplotlib.pyplot as plt
 
+# Configuración de página
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
 
-# --- Constantes ---
+# Constantes
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# --- Firebase Init ---
+# Inicializar Firebase
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- Funciones ---
+# Función robusta para calcular Age
+def safe_age(created_date):
+    try:
+        if pd.isna(created_date):
+            return None
+        return (pd.Timestamp("today").normalize() - pd.to_datetime(created_date).normalize()).days
+    except Exception:
+        return None
+
+# Funciones
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-    today = pd.Timestamp("today").normalize()
-    df["Age"] = df["Created"].apply(
-        lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
-    )
+    df["Age"] = df["Created"].apply(safe_age)
 
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].str[:2]
@@ -48,7 +55,6 @@ def load_data_from_excel(uploaded_file):
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
     return df
 
-
 def summarize(df):
     return df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
@@ -57,7 +63,6 @@ def summarize(df):
         **{"2 Days": ("2 Days", "sum")},
         **{"+3 Days": ("+3 Days", "sum")},
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
-
 
 def upload_to_firestore(df):
     df = df.copy()
@@ -73,7 +78,6 @@ def upload_to_firestore(df):
         "last_update": dt.datetime.utcnow()
     })
 
-
 def download_from_firestore():
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
     if doc.exists:
@@ -81,15 +85,13 @@ def download_from_firestore():
         return pd.DataFrame(content["data"]), content.get("last_update")
     return pd.DataFrame(), None
 
-
 def to_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-
-# --- Admin Access ---
+# --- Administrador
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -109,15 +111,12 @@ with st.expander("🔐 Administrator Access"):
             st.success("Database updated successfully ✅")
             st.rerun()
 
-# --- Load Data ---
+# --- Cargar datos
 df, last_update = download_from_firestore()
 
 if not df.empty:
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-    today = pd.Timestamp("today").normalize()
-    df["Age"] = df["Created"].apply(
-        lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
-    )
+    df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
@@ -126,7 +125,7 @@ if not df.empty:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 
-    # --- Filtros Sidebar ---
+    # Filtros Sidebar
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
@@ -158,6 +157,7 @@ if not df.empty:
         kpi1.metric("🎫 Open Tickets", total_open)
         kpi2.metric("🕑 +3 Days", total_plus3)
         kpi3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
+
         if percent_overdue > 30:
             st.warning("⚠️ High Overdue Rate! Please check aging tickets.")
 
@@ -207,7 +207,7 @@ if not df.empty:
     else:
         st.warning("No data available for selected filters.")
 
-# --- Footer ---
+# Footer
 footer = f"Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}" if last_update else "Last update: –"
 st.markdown(
     f"""
