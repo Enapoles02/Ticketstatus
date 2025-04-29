@@ -15,10 +15,9 @@ DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
 if not firebase_admin._apps:
-    firebase_credentials = json.loads(st.secrets["firebase_credentials"])
-    cred = credentials.Certificate(firebase_credentials)
+    cred = credentials.Certificate(st.secrets["firebase_credentials"])
     firebase_admin.initialize_app(cred)
-db = firestore.client()
+
 
 def safe_age(created_date):
     try:
