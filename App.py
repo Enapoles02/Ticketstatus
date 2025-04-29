@@ -74,6 +74,7 @@ def upload_to_firestore(df, batch_size=500):
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_clean = df_clean.where(pd.notnull(df_clean), None)
+
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(columns=[col], inplace=True)
@@ -86,39 +87,55 @@ def upload_to_firestore(df, batch_size=500):
     status_text = st.empty()
 
     try:
+        # Limpiar documentos anteriores
         for doc in db.collection(COLLECTION_NAME).stream():
             doc.reference.delete()
 
+        # Subir en bloques
         for i in range(total_batches):
             batch_df = df_clean.iloc[i * batch_size : (i + 1) * batch_size]
-            db.collection(COLLECTION_NAME).document(f"batch_{i}").set({"rows": batch_df.to_dict(orient="records")})
+            batch_data = batch_df.to_dict(orient="records")
+            db.collection(COLLECTION_NAME).document(f"batch_{i}").set({
+                "rows": batch_data,
+                "timestamp": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            })
             progress_bar.progress((i + 1) / total_batches, text=f"Uploaded batch {i + 1}/{total_batches}")
 
+        # Metadata
         db.collection(COLLECTION_NAME).document("meta_info").set({
             "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
             "total_batches": total_batches,
             "total_rows": total_rows
         })
+
         progress_bar.empty()
         status_text.success("✅ All batches uploaded successfully!")
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
 
+
 def download_from_firestore():
     meta_doc = db.collection(COLLECTION_NAME).document("meta_info").get()
     if not meta_doc.exists:
         return pd.DataFrame(), None
+
     meta_info = meta_doc.to_dict()
     total_batches = meta_info.get("total_batches", 0)
-    last_update = meta_info.get("last_update")
+    last_update_str = meta_info.get("last_update")
 
     all_rows = []
     for i in range(total_batches):
         batch_doc = db.collection(COLLECTION_NAME).document(f"batch_{i}").get()
         if batch_doc.exists:
-            all_rows.extend(batch_doc.to_dict().get("rows", []))
+            batch_data = batch_doc.to_dict()
+            all_rows.extend(batch_data.get("rows", []))
 
-    return pd.DataFrame(all_rows), last_update
+    df_combined = pd.DataFrame(all_rows)
+
+    if "Created" in df_combined.columns:
+        df_combined["Created"] = pd.to_datetime(df_combined["Created"], errors="coerce")
+
+    return df_combined, last_update_str
 
 def to_excel(df):
     df_safe = df.copy()
