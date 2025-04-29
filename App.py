@@ -30,19 +30,28 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
+    created_col = [col for col in df.columns if "created" in col.lower()]
+    if created_col:
+        df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce")
+    else:
+        df["Created"] = pd.NaT
+        st.warning("No column found containing 'Created'. Aging cannot be calculated.")
+
     df["Age"] = df["Created"].apply(safe_age)
+
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].str[:2]
         df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
     else:
         df["Country"] = ""
         df["CompanyCode"] = ""
+
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
+
     pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
     return df
