@@ -1,35 +1,47 @@
 import streamlit as st
 import firebase_admin
-from firebase_admin import credentials
-import json
+from firebase_admin import credentials, firestore
 
-st.title("🔎 Firebase Debugging")
+st.set_page_config(page_title="🔐 Firebase Test", layout="centered")
+st.title("🔐 Firebase Connection Test")
 
-# Mostrar qué está leyendo exactamente
-st.subheader("🔍 Raw st.secrets[\"firebase_credentials\"]")
-
+# 1. Leer secretos
 try:
-    raw = st.secrets["firebase_credentials"]
-    st.write(raw)
-    st.success("✅ Successfully read st.secrets[\"firebase_credentials\"]")
+    firebase_secret = st.secrets["firebase_credentials"]
+    st.success("✅ Loaded st.secrets[\"firebase_credentials\"]")
 except Exception as e:
-    st.error(f"❌ Failed to read st.secrets: {e}")
+    st.error(f"❌ Could not read firebase_credentials: {e}")
+    st.stop()
 
-# Intentar ver si es dict o string
-st.subheader("📚 Type of st.secrets[\"firebase_credentials\"]")
+# 2. Mostrar tipo
+st.subheader("📚 Type of secret")
+st.code(str(type(firebase_secret)))
 
-try:
-    st.write(f"Type: {type(raw)}")
-except Exception as e:
-    st.error(f"❌ Failed to get type: {e}")
+# 3. Mostrar claves disponibles
+st.subheader("🔑 Keys in firebase_credentials")
+st.code(list(firebase_secret.keys()))
 
-# Intentar inicializar Firebase
-st.subheader("🚀 Firebase initialization test")
-
+# 4. Inicializar Firebase
+st.subheader("🚀 Firebase Initialization")
 try:
     if not firebase_admin._apps:
-        cred = credentials.Certificate(raw)
+        cred = credentials.Certificate(firebase_secret)
         firebase_admin.initialize_app(cred)
-        st.success("✅ Firebase initialized successfully.")
+        st.success("✅ Firebase initialized successfully!")
+    else:
+        st.info("ℹ️ Firebase already initialized.")
 except Exception as e:
-    st.error(f"❌ Firebase initialization failed: {e}")
+    st.error(f"❌ Firebase initialization failed:\n\n{e}")
+    st.stop()
+
+# 5. Probar conexión a Firestore
+st.subheader("🧪 Firestore Test")
+try:
+    db = firestore.client()
+    doc_ref = db.collection("test_connection").document("streamlit_test")
+    doc_ref.set({"status": "connected via Streamlit", "success": True})
+    doc = doc_ref.get()
+    st.success("✅ Firestore write and read successful!")
+    st.code(doc.to_dict())
+except Exception as e:
+    st.error(f"❌ Firestore test failed:\n\n{e}")
