@@ -76,43 +76,46 @@ def summarize(df):
         **{"+3 Days": ("+3 Days", "sum")}
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
-def upload_to_firestore(df):
+def upload_to_firestore(df, chunk_size=100):
     df_clean = df.copy()
 
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
-
     df_clean = df_clean.where(pd.notnull(df_clean), None)
-
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(columns=[col], inplace=True)
             st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
 
-    try:
-        total_rows = df_clean.shape[0]
-        progress_bar = st.progress(0, text="Uploading to Firestore...")
-        status_text = st.empty()
+    total_rows = df_clean.shape[0]
+    num_chunks = (total_rows + chunk_size - 1) // chunk_size
 
-        # (Opcional) Borrar documentos existentes
+    progress_bar = st.progress(0, text="Uploading chunks to Firestore...")
+    status_text = st.empty()
+
+    try:
+        # Limpia documentos previos
         docs = db.collection(COLLECTION_NAME).stream()
         for doc in docs:
             doc.reference.delete()
 
-        # Subir cada fila como documento individual
-        for i, row in df_clean.iterrows():
-            doc_id = f"ticket_{i}"
-            db.collection(COLLECTION_NAME).document(doc_id).set(row.to_dict())
-            if i % 10 == 0 or i == total_rows - 1:
-                progress_bar.progress(int((i + 1) / total_rows * 100), text=f"Uploaded {i + 1}/{total_rows}")
+        for i in range(num_chunks):
+            chunk_df = df_clean.iloc[i * chunk_size : (i + 1) * chunk_size]
+            doc_id = f"chunk_{i}"
+            db.collection(COLLECTION_NAME).document(doc_id).set({
+                "rows": chunk_df.to_dict(orient="records")
+            })
+            progress = int((i + 1) / num_chunks * 100)
+            progress_bar.progress(progress, text=f"Uploaded chunk {i + 1}/{num_chunks}")
 
-        # Guardar metadata
         db.collection(COLLECTION_NAME).document("meta_info").set({
-            "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
+            "chunks": num_chunks,
+            "rows_total": total_rows
         })
 
         progress_bar.empty()
-        status_text.success("✅ All rows uploaded to Firestore successfully!")
+        status_text.success("✅ Data uploaded in chunks successfully!")
 
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
