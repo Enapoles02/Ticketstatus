@@ -53,6 +53,7 @@ def load_data_from_excel(uploaded_file):
         st.warning("⚠️ Column 'Assigned to' not found. Skipping unassigned logic.")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
     return df
+
 def summarize(df):
     return df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
@@ -97,9 +98,10 @@ def to_excel(df):
 # ================== UI =======================
 if "admin" not in st.session_state:
     st.session_state.admin = False
+if "db_updated" not in st.session_state:
+    st.session_state.db_updated = False
 
 st.title("📈 Tickets Aging Dashboard")
-refresh = st.button("🔄 Refresh Database")
 
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
@@ -110,13 +112,18 @@ with st.expander("🔐 Administrator Access"):
     else:
         uploaded = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
         if uploaded:
-            df_new = load_data_from_excel(uploaded)
-            upload_to_firestore(df_new)
-            st.success("Database updated successfully ✅")
-            st.rerun()
+            with st.spinner("Uploading and refreshing database..."):
+                df_new = load_data_from_excel(uploaded)
+                upload_to_firestore(df_new)
+                st.session_state.db_updated = True
+                st.success("Database updated successfully ✅")
 
-if refresh:
-    st.rerun()
+if st.button("🔄 Refresh Database"):
+    st.session_state.db_updated = True
+
+if st.session_state.db_updated:
+    st.session_state.db_updated = False
+    st.experimental_rerun()
 
 df, last_update = download_from_firestore()
 
@@ -160,6 +167,7 @@ if not df.empty:
         kpi1.metric("🎫 Open Tickets", total_open)
         kpi2.metric("🕑 +3 Days", total_plus3)
         kpi3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
+
         st.subheader("📋 Summary by Tower")
         st.dataframe(summary_filtered, use_container_width=True, hide_index=True)
 
