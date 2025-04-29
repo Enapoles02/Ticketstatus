@@ -209,8 +209,8 @@ if not df.empty:
                 st.pyplot(fig2)
             else:
                 st.warning("No data for +3 Days chart.")
-                
-st.subheader("📋 Status Overview by Tower")
+
+        st.subheader("📋 Status Overview by Tower")
 pivot_status = df_graph.pivot_table(
     index="State",
     columns="TowerGroup",
@@ -220,6 +220,7 @@ pivot_status = df_graph.pivot_table(
 ).astype(int)
 
 st.dataframe(pivot_status, use_container_width=True)
+
 
         st.subheader("📥 Download Full Data")
         st.download_button(
