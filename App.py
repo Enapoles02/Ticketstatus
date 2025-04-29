@@ -7,32 +7,29 @@ from firebase_admin import credentials, firestore
 import io
 import matplotlib.pyplot as plt
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(
-    page_title="Tickets Dashboard",
-    page_icon="📈",
-    layout="wide",
-)
+st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
 
-# --- CONSTANTES ---
+# --- Constantes ---
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-# --- FIREBASE ---
+# --- Firebase Init ---
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- FUNCIONES ---
+# --- Funciones ---
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     today = pd.Timestamp("today").normalize()
-    df["Age"] = df["Created"].apply(lambda x: (today - x.normalize()).days if pd.notna(x) else None)
+    df["Age"] = df["Created"].apply(
+        lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
+    )
 
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].str[:2]
@@ -49,7 +46,6 @@ def load_data_from_excel(uploaded_file):
 
     pattern = "|".join(["closed", "resolved", "cancel"])
     df["is_open"] = ~df["State"].str.contains(pattern, case=False, na=False)
-
     return df
 
 
@@ -93,7 +89,7 @@ def to_excel(df):
     return output.getvalue()
 
 
-# --- ADMIN LOGIN ---
+# --- Admin Access ---
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -113,15 +109,15 @@ with st.expander("🔐 Administrator Access"):
             st.success("Database updated successfully ✅")
             st.rerun()
 
-# --- LOAD DATA ---
+# --- Load Data ---
 df, last_update = download_from_firestore()
 
 if not df.empty:
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-   today = pd.Timestamp("today").normalize()
-df["Age"] = df["Created"].apply(
-    lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
-)
+    today = pd.Timestamp("today").normalize()
+    df["Age"] = df["Created"].apply(
+        lambda x: (today - x.normalize()).days if isinstance(x, pd.Timestamp) and pd.notna(x) else None
+    )
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
@@ -130,7 +126,7 @@ df["Age"] = df["Created"].apply(
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 
-    # --- SIDEBAR FILTERS ---
+    # --- Filtros Sidebar ---
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
@@ -188,14 +184,6 @@ df["Age"] = df["Created"].apply(
         status_summary.columns = ["Status", "Count"]
         st.dataframe(status_summary, use_container_width=True, hide_index=True)
 
-        # COLOR STATUS TABLE
-        def color_status(val):
-            if "pending" in str(val).lower() or "await" in str(val).lower():
-                return "background-color: #ffdede"
-            return ""
-
-        st.dataframe(df_graph[["Number", "State", "Created", "Age"]].style.applymap(color_status, subset=["State"]), use_container_width=True)
-
         st.subheader("📥 Download Data")
         st.download_button(
             label="Download Filtered DB",
@@ -219,7 +207,7 @@ df["Age"] = df["Created"].apply(
     else:
         st.warning("No data available for selected filters.")
 
-# --- FOOTER ---
+# --- Footer ---
 footer = f"Last update: {last_update.strftime('%Y-%m-%d %H:%M:%S')}" if last_update else "Last update: –"
 st.markdown(
     f"""
