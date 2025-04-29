@@ -14,6 +14,7 @@ COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
+# Firebase initialization
 if not firebase_admin._apps:
     firebase_credentials = json.loads(st.secrets["firebase_credentials"])
     cred = credentials.Certificate(firebase_credentials)
@@ -30,12 +31,18 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
+    
+    # Limpieza de encabezados
+    df.columns = df.columns.str.strip()
+
     created_col = [col for col in df.columns if "created" in col.lower()]
     if created_col:
         df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce")
+    elif "Opened" in df.columns:
+        df["Created"] = pd.to_datetime(df["Opened"], errors="coerce")
     else:
         df["Created"] = pd.NaT
-        st.warning("No column found containing 'Created'. Aging cannot be calculated.")
+        st.warning("No column found containing 'Created' or 'Opened'. Aging cannot be calculated.")
 
     df["Age"] = df["Created"].apply(safe_age)
 
@@ -92,6 +99,7 @@ def to_excel(df):
         df.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
+# Estado inicial
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -99,6 +107,7 @@ st.title("📈 Tickets Aging Dashboard")
 
 refresh = st.button("🔄 Refresh Database")
 
+# Modo administrador
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
         pwd = st.text_input("Enter ADMIN Code", type="password")
@@ -129,6 +138,7 @@ if not df.empty:
         df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 
+    # Filtros
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     companies = sorted(df["CompanyCode"].dropna().unique())
