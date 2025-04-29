@@ -94,9 +94,13 @@ def download_from_firestore():
     return pd.DataFrame(), None
 
 def to_excel(df):
+    df_safe = df.copy()
+    for col in df_safe.columns:
+        df_safe[col] = df_safe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set)) else x)
+
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Data")
+        df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
 # Estado inicial
