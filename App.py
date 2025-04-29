@@ -34,13 +34,24 @@ def load_data_from_excel(uploaded_file):
     df.columns = df.columns.str.strip()
 
     created_col = [col for col in df.columns if "created" in col.lower()]
-    if created_col:
+    try:
+        if created_col:
+            df["Created"] = pd.to_datetime(
+                df[created_col[0]],
+                format="%m/%d/%Y %I:%M:%S %p",  # Forzar formato: 4/14/2025 11:37:19 AM
+                errors="coerce"
+            ).dt.normalize()
+        elif "Opened" in df.columns:
+            df["Created"] = pd.to_datetime(
+                df["Opened"],
+                format="%m/%d/%Y %I:%M:%S %p",
+                errors="coerce"
+            ).dt.normalize()
+        else:
+            df["Created"] = pd.NaT
+            st.warning("No column found containing 'Created' or 'Opened'. Aging cannot be calculated.")
+    except Exception:
         df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize()
-    elif "Opened" in df.columns:
-        df["Created"] = pd.to_datetime(df["Opened"], errors="coerce").dt.normalize()
-    else:
-        df["Created"] = pd.NaT
-        st.warning("No column found containing 'Created' or 'Opened'. Aging cannot be calculated.")
 
     df["Age"] = df["Created"].apply(safe_age)
 
@@ -93,12 +104,8 @@ def download_from_firestore():
 
 def to_excel(df):
     df_safe = df.copy()
-
-    # Quitar zonas horarias si existen
     for col in df_safe.select_dtypes(include=["datetimetz"]).columns:
         df_safe[col] = df_safe[col].dt.tz_localize(None)
-
-    # Convertir valores no exportables
     for col in df_safe.columns:
         df_safe[col] = df_safe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set)) else x)
 
@@ -164,6 +171,10 @@ if not df.empty:
 
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
+
+    # DEPURACIÓN: Ver las fechas y edades que se están usando
+    st.subheader("🕵️‍♂️ Raw Aging Sample")
+    st.dataframe(df_graph[["Created", "Age"]].head(10))
 
     if not df_graph.empty:
         st.subheader("📊 KPIs")
