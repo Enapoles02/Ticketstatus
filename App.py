@@ -185,23 +185,25 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
-    if "Client codes coding" in df.columns:
-        df["Client codes coding"] = df["Client codes coding"].astype(str)
-        df["Country"] = df["Client codes coding"].str[:2]
-        df["CompanyCode"] = df["Client codes coding"].str[-4:]
-        df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
-
-        region_map = {
-            "NAMER": ["US", "CA"],
-            "LATAM": ["MX", "AR", "PE"],
-            "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
-            "AFRICA": ["AO", "ZA"],
-            "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
-        }
-        region_lookup = {code: region for region, codes in region_map.items() for code in codes}
-        df["Region"] = df["Country"].map(region_lookup).fillna("Other")
-    else:
+    # Verifica columna de client
+    if "Client codes coding" not in df.columns:
         st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
+        st.stop()
+
+    df["Client codes coding"] = df["Client codes coding"].astype(str)
+    df["Country"] = df["Client codes coding"].str[:2]
+    df["CompanyCode"] = df["Client codes coding"].str[-4:]
+    df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
+
+    region_map = {
+        "NAMER": ["US", "CA"],
+        "LATAM": ["MX", "AR", "PE"],
+        "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
+        "AFRICA": ["AO", "ZA"],
+        "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
+    }
+    region_lookup = {code: region for region, codes in region_map.items() for code in codes}
+    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     df["Age"] = df["Created"].apply(safe_age)
@@ -233,6 +235,7 @@ if not df.empty:
     sel_towers = st.sidebar.multiselect("Select Towers", summary["TOWER"].unique(), default=summary["TOWER"].unique())
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
+
 
     if not df_graph.empty:
         st.subheader("📊 KPIs")
