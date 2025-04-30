@@ -41,7 +41,6 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
 
     if "Client Codes Coding" not in df.columns:
@@ -220,6 +219,14 @@ if not df.empty:
         df["Region"].isin(sel_region) &
         df["TowerGroup"].isin(ALLOWED_TOWERS)
     ]
+
+    # 🔍 Debug: resumen de aging en datos filtrados
+    with st.expander("🧐 Debug: Aging Breakdown en datos filtrados"):
+        st.dataframe(
+            df_filtered[["TowerGroup", "Age", "Today", "Yesterday", "2 Days", "+3 Days"]]
+            .groupby("TowerGroup")
+            .sum()
+        )
 
     summary = summarize(df_filtered)
     sel_towers = st.sidebar.multiselect("Select Towers", summary["TOWER"].unique(), default=summary["TOWER"].unique())
