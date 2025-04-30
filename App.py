@@ -260,5 +260,5 @@ fig_map = px.choropleth(map_data,
     hover_name="Country",
     color_continuous_scale=px.colors.sequential.Blues,
     title="Ticket Distribution by Country")
-fig_map.update_geos(showcountries=True, showcountriesframe=False)
+fig_map.update_geos(showcountries=True, showframe=False)
 st.plotly_chart(fig_map, use_container_width=True)
