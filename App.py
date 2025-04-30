@@ -162,6 +162,24 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
+    if "Client codes coding" in df.columns:
+        df["Client codes coding"] = df["Client codes coding"].astype(str)
+        df["Country"] = df["Client codes coding"].str[:2]
+        df["CompanyCode"] = df["Client codes coding"].str[-4:]
+        df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
+
+        region_map = {
+            "NAMER": ["US", "CA"],
+            "LATAM": ["MX", "AR", "PE"],
+            "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
+            "AFRICA": ["AO", "ZA"],
+            "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
+        }
+        region_lookup = {code: region for region, codes in region_map.items() for code in codes}
+        df["Region"] = df["Country"].map(region_lookup).fillna("Other")
+    else:
+        st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
+
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
     df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
@@ -172,9 +190,6 @@ if not df.empty:
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
-    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
-    df["Region"] = df["Country"].map(region_map).fillna("Other")
-
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     sel_country = st.sidebar.multiselect("Country", countries, default=countries)
@@ -182,7 +197,7 @@ if not df.empty:
     compatible_companies = df[df["Country"].isin(sel_country)]["CompanyCode"].unique()
     sel_company = st.sidebar.multiselect("Company Code", sorted(compatible_companies), default=sorted(compatible_companies))
 
-    sel_region = st.sidebar.multiselect("Region", sorted(set(region_map.values())), default=sorted(set(region_map.values())))
+    sel_region = st.sidebar.multiselect("Region", sorted(set(region_lookup.values())), default=sorted(set(region_lookup.values())))
 
     df_filtered = df[
         df["Country"].isin(sel_country) &
