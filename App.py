@@ -44,7 +44,7 @@ def load_data_from_excel(uploaded_file):
 
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
 
-    if "Client codes coding" not in df.columns:
+    if "Client Codes Coding" not in df.columns:
         st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
         st.stop()
 
