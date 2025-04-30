@@ -41,7 +41,7 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
-    df.columns = df.columns.str.strip()
+    df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
 
     created_col = [col for col in df.columns if "created" in col.lower()]
     df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize() if created_col else pd.NaT
