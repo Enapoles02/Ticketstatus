@@ -3,3 +3,5 @@ pandas
 openpyxl
 firebase-admin
 matplotlib
+altair
+plotly
