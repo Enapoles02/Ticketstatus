@@ -45,7 +45,7 @@ def load_data_from_excel(uploaded_file):
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
 
     if "Client Codes Coding" not in df.columns:
-        st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
+        st.error("❌ Missing 'Client Codes Coding' column in data. Cannot derive Country or Region.")
         st.stop()
 
     created_col = [col for col in df.columns if "created" in col.lower()]
@@ -60,9 +60,9 @@ def load_data_from_excel(uploaded_file):
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
-    df["Client codes coding"] = df["Client codes coding"].astype(str)
-    df["Country"] = df["Client codes coding"].str[:2]
-    df["CompanyCode"] = df["Client codes coding"].str[-4:]
+    df["Client Codes Coding"] = df["Client Codes Coding"].astype(str)
+    df["Country"] = df["Client Codes Coding"].str[:2]
+    df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
     df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
 
     region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
@@ -183,13 +183,13 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
-    if "Client codes coding" not in df.columns:
-        st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
+    if "Client Codes Coding" not in df.columns:
+        st.error("❌ Missing 'Client Codes Coding' column in data. Cannot derive Country or Region.")
         st.stop()
 
-    df["Client codes coding"] = df["Client codes coding"].astype(str)
-    df["Country"] = df["Client codes coding"].str[:2]
-    df["CompanyCode"] = df["Client codes coding"].str[-4:]
+    df["Client Codes Coding"] = df["Client Codes Coding"].astype(str)
+    df["Country"] = df["Client Codes Coding"].str[:2]
+    df["CompanyCode"] = df["Client Codes Coding"].str[-4:]
     df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
 
     region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
