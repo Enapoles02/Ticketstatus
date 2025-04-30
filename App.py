@@ -42,6 +42,12 @@ def load_data_from_excel(uploaded_file):
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
         df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
+            # Filtro: solo países permitidos
+    allowed_countries = ["CL", "AR", "MX", "PE", "PA", "GT", "CA", "US"]
+    df = df[df["Country"].isin(allowed_countries)]
+
+    if df.empty:
+        st.warning("⚠️ No records found for allowed countries: " + ", ".join(allowed_countries))
     else:
         df["Country"] = None
         df["CompanyCode"] = None
