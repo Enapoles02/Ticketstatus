@@ -250,15 +250,3 @@ chart = alt.Chart(alt_data).mark_bar().encode(
 ).interactive().properties(width=700, height=400)
 st.altair_chart(chart, use_container_width=True)
 
-st.subheader("🗺️ Tickets by Country (Map)")
-import plotly.express as px
-map_data = df_graph.groupby("Country").size().reset_index(name="Ticket Count")
-fig_map = px.choropleth(map_data,
-    locations="Country",
-    locationmode="ISO-3",
-    color="Ticket Count",
-    hover_name="Country",
-    color_continuous_scale=px.colors.sequential.Blues,
-    title="Ticket Distribution by Country")
-fig_map.update_geos(showcountries=True, showcountriesframe=False)
-st.plotly_chart(fig_map, use_container_width=True)
