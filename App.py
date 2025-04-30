@@ -56,12 +56,35 @@ def load_data_from_excel(uploaded_file):
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
-    if "Client codes coding" in df.columns:
-        df["Client codes coding"] = df["Client codes coding"].astype(str)
-        df["Country"] = df["Client codes coding"].str[:2]
-        df["CompanyCode"] = df["Client codes coding"].str[-4:]
-        df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
-    return df
+       if "Client codes coding" not in df.columns:
+        st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
+        st.stop()
+
+    df["Client codes coding"] = df["Client codes coding"].astype(str)
+    df["Country"] = df["Client codes coding"].str[:2]
+    df["CompanyCode"] = df["Client codes coding"].str[-4:]
+    df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
+
+    region_map = {
+        "NAMER": ["US", "CA"],
+        "LATAM": ["MX", "AR", "PE"],
+        "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
+        "AFRICA": ["AO", "ZA"],
+        "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
+    }
+    region_lookup = {code: region for region, codes in region_map.items() for code in codes}
+    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
+
+    df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
+    df["Age"] = df["Created"].apply(safe_age)
+    df["Today"] = df["Age"] == 0
+    df["Yesterday"] = df["Age"] == 1
+    df["2 Days"] = df["Age"] == 2
+    df["+3 Days"] = df["Age"] >= 3
+    df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
+    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+    df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
+
 
 def summarize(df):
     return df.groupby("TowerGroup").agg(
