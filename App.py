@@ -8,19 +8,19 @@ import io
 import matplotlib.pyplot as plt
 
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
+
 ADMIN_CODE = "ADMIN"
 COLLECTION_NAME = "aging_dashboard"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
-REGION_MAP = {
-    "US": "NAMER", "CA": "NAMER", "MX": "LATAM", "AR": "LATAM", "PE": "LATAM",
-    "BE": "EUR", "GB": "EUR", "ES": "EUR", "SE": "EUR", "IT": "EUR", "FR": "EUR",
-    "AT": "EUR", "SK": "EUR", "RO": "EUR", "IE": "EUR", "CH": "EUR",
-    "AO": "AFRICA", "ZA": "AFRICA", "BH": "ASIA / MIDDLE EAST",
-    "QA": "ASIA / MIDDLE EAST", "AE": "ASIA / MIDDLE EAST"
+REGION_MAPPING = {
+    "NAMER": ["US", "CA"],
+    "LATAM": ["MX", "AR", "PE"],
+    "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
+    "AFRICA": ["AO", "ZA"],
+    "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
 }
 
-# Firebase Init
 if not firebase_admin._apps:
     raw_credentials = st.secrets["firebase_credentials"]
     firebase_credentials = json.loads(json.dumps(dict(raw_credentials)))
@@ -41,15 +41,6 @@ def safe_age(created_date):
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip()
-    if "Client codes coding" in df.columns:
-        df["Country"] = df["Client codes coding"].astype(str).str[:2]
-        df["CompanyCode"] = df["Client codes coding"].astype(str).str[-4:]
-        df["Region"] = df["Country"].map(REGION_MAP).fillna("Other")
-    else:
-        df["Country"] = "Unknown"
-        df["CompanyCode"] = "0000"
-        df["Region"] = "Other"
-
     created_col = [col for col in df.columns if "created" in col.lower()]
     if created_col:
         df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize()
@@ -64,8 +55,21 @@ def load_data_from_excel(uploaded_file):
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+
+    if "Assigned to" in df.columns:
+        df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+    else:
+        df["Is_Unassigned"] = False
+        st.warning("⚠️ Column 'Assigned to' not found.")
+
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
+
+    if "Client codes coding" in df.columns:
+        df["Client codes coding"] = df["Client codes coding"].astype(str)
+        df["Country"] = df["Client codes coding"].str[:2]
+        df["CompanyCode"] = df["Client codes coding"].str[-4:]
+        df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
+
     return df
 
 def summarize(df):
@@ -77,17 +81,43 @@ def summarize(df):
         **{"+3 Days": ("+3 Days", "sum")}
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
-def upload_to_firestore(df):
+def upload_to_firestore(df, batch_size=500):
+    df_clean = df.copy()
+    for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
+        df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+    df_clean = df_clean.where(pd.notnull(df_clean), None)
+
+    for col in df_clean.columns:
+        if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
+            df_clean.drop(columns=[col], inplace=True)
+            st.warning(f"⚠️ Dropped column '{col}' (not serializable).")
+
+    total_rows = len(df_clean)
+    total_batches = (total_rows + batch_size - 1) // batch_size
+
+    progress_bar = st.progress(0, text="Uploading batches to Firestore...")
+    status_text = st.empty()
+
     try:
         for doc in db.collection(COLLECTION_NAME).stream():
             doc.reference.delete()
-        for i, row in df.iterrows():
-            db.collection(COLLECTION_NAME).document(f"row_{i}").set(row.dropna().to_dict())
+
+        for i in range(total_batches):
+            batch_df = df_clean.iloc[i * batch_size : (i + 1) * batch_size]
+            db.collection(COLLECTION_NAME).document(f"batch_{i}").set({
+                "rows": batch_df.to_dict(orient="records"),
+                "timestamp": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+            })
+            progress_bar.progress((i + 1) / total_batches, text=f"Uploaded batch {i+1}/{total_batches}")
+
         db.collection(COLLECTION_NAME).document("meta_info").set({
             "last_update": dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
-            "total_rows": len(df)
+            "total_batches": total_batches,
+            "total_rows": total_rows
         })
-        st.success("✅ Data uploaded successfully!")
+
+        progress_bar.empty()
+        status_text.success("✅ All batches uploaded successfully!")
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
 
@@ -95,19 +125,30 @@ def download_from_firestore():
     docs = db.collection(COLLECTION_NAME).stream()
     rows = []
     last_update = None
+
     for doc in docs:
-        if doc.id == "meta_info":
-            last_update = doc.to_dict().get("last_update")
-        else:
-            rows.append(doc.to_dict())
+        data = doc.to_dict()
+        if "rows" in data:
+            rows.extend(data["rows"])
+        elif all(isinstance(v, (str, int, float, bool, type(None))) for v in data.values()):
+            rows.append(data)
+        if not last_update and "timestamp" in data:
+            last_update = data.get("timestamp")
+
     return pd.DataFrame(rows), last_update
 
 def to_excel(df):
+    df_safe = df.copy()
+    for col in df_safe.select_dtypes(include=["datetimetz"]).columns:
+        df_safe[col] = df_safe[col].dt.tz_localize(None)
+    for col in df_safe.columns:
+        df_safe[col] = df_safe[col].apply(lambda x: str(x) if isinstance(x, (dict, list, set)) else x)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False)
+        df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
+# ---- App UI ----
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -125,6 +166,7 @@ with st.expander("🔐 Administrator Access"):
         if uploaded:
             df_new = load_data_from_excel(uploaded)
             upload_to_firestore(df_new)
+            st.success("Database updated successfully ✅")
             st.rerun()
 
 if refresh:
@@ -145,23 +187,21 @@ if not df.empty:
 
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
-    companies = sorted(df["CompanyCode"].dropna().unique())
-    regions = sorted(df["Region"].dropna().unique())
-    sel_region = st.sidebar.multiselect("🌍 Region", regions, default=regions)
     sel_country = st.sidebar.multiselect("Country", countries, default=countries)
-    sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
+
+    compatible_companies = df[df["Country"].isin(sel_country)]["CompanyCode"].unique()
+    sel_company = st.sidebar.multiselect("Company Code", sorted(compatible_companies), default=sorted(compatible_companies))
+
+    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
+    df["Region"] = df["Country"].map(region_map).fillna("Other")
+    sel_region = st.sidebar.multiselect("Region", sorted(set(region_map.values())), default=sorted(set(region_map.values())))
 
     df_filtered = df[
-        df["Region"].isin(sel_region) &
         df["Country"].isin(sel_country) &
         df["CompanyCode"].isin(sel_company) &
+        df["Region"].isin(sel_region) &
         df["TowerGroup"].isin(ALLOWED_TOWERS)
     ]
-
-    # Subfiltro: mostrar solo CompanyCodes compatibles con Country
-    if not df_filtered.empty:
-        combos_validos = df_filtered.groupby("Country")["CompanyCode"].unique().to_dict()
-        df_filtered = df_filtered[df_filtered.apply(lambda row: row["CompanyCode"] in combos_validos.get(row["Country"], []), axis=1)]
 
     summary = summarize(df_filtered)
     sel_towers = st.sidebar.multiselect("Select Towers", summary["TOWER"].unique(), default=summary["TOWER"].unique())
@@ -173,29 +213,41 @@ if not df.empty:
         total_open = int(df_graph["is_open"].sum())
         total_plus3 = int(df_graph["+3 Days"].sum())
         percent_overdue = (total_plus3 / total_open) * 100 if total_open > 0 else 0
-        k1, k2, k3 = st.columns(3)
-        k1.metric("🎫 Open Tickets", total_open)
-        k2.metric("🕑 +3 Days", total_plus3)
-        k3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
+        kpi1, kpi2, kpi3 = st.columns(3)
+        kpi1.metric("🎫 Open Tickets", total_open)
+        kpi2.metric("🕑 +3 Days", total_plus3)
+        kpi3.metric("📈 % Overdue", f"{percent_overdue:.1f}%")
 
         st.subheader("📋 Summary by Tower")
-        st.dataframe(summary_filtered, use_container_width=True)
+        st.dataframe(summary_filtered, use_container_width=True, hide_index=True)
 
-        st.subheader("📊 Unassigned Tickets by Tower and Aging")
-        chart_df = df_graph[df_graph["Is_Unassigned"]].copy()
-        chart_df["Age Bucket"] = pd.cut(chart_df["Age"], bins=[-1, 0, 1, 2, float("inf")], labels=["0", "1", "2", "3+"])
-        if not chart_df.empty:
-            chart_summary = chart_df.groupby(["TowerGroup", "Age Bucket"]).size().unstack().fillna(0)
-            st.bar_chart(chart_summary)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("**🔵 Open Tickets Distribution by Tower**")
+            fig1, ax1 = plt.subplots()
+            ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
+            ax1.axis('equal')
+            st.pyplot(fig1)
 
-        st.subheader("📥 Download Filtered Data")
-        st.download_button("Download DB", data=to_excel(df_graph), file_name="Tickets.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    else:
-        st.warning("No data available for selected filters.")
+        with col2:
+            st.markdown("**🟠 Tickets Aged +3 Days by Tower**")
+            fig2, ax2 = plt.subplots()
+            ax2.pie(summary_filtered["+3 Days"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
+            ax2.axis('equal')
+            st.pyplot(fig2)
 
-    st.markdown(f"""
-    <div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
-    padding:6px; font-size:0.75rem; color:#888; background-color:#f8f8f8;">
-    Last update: {last_update if last_update else "–"}
-    </div>
-    """, unsafe_allow_html=True)
+        st.subheader("📋 Unassigned Tickets Overview")
+        df_unassigned = df_graph[df_graph["Is_Unassigned"]].copy()
+        if not df_unassigned.empty:
+            unassigned_summary = df_unassigned.groupby(["TowerGroup", "Unassigned_Age"]).size().unstack(fill_value=0)
+            st.bar_chart(unassigned_summary.T)
+        else:
+            st.success("✅ No unassigned tickets at the moment.")
+
+footer_text = f"""
+<div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
+padding:6px; font-size:0.75rem; color:#888; background-color:#f8f8f8;">
+Last update: {last_update if last_update else "–"}
+</div>
+"""
+st.markdown(footer_text, unsafe_allow_html=True)
