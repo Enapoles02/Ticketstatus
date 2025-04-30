@@ -241,7 +241,7 @@ if "Region" not in df_graph.columns:
     region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
     df_graph["Region"] = df_graph["Country"].map(region_lookup).fillna("Other")
 
-alt_data = df_graph.groupby(["Region", "Country"]).size().reset_index(name="Ticket Count").size().reset_index(name="Ticket Count")
+alt_data = df_graph.groupby(["Region", "Country"]).size().reset_index(name="Ticket Count")
 chart = alt.Chart(alt_data).mark_bar().encode(
     x=alt.X('Country:N', sort='-y'),
     y='Ticket Count:Q',
@@ -262,5 +262,3 @@ fig_map = px.choropleth(map_data,
     title="Ticket Distribution by Country")
 fig_map.update_geos(showcountries=True, showcountriesframe=False)
 st.plotly_chart(fig_map, use_container_width=True)
-
-...
