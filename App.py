@@ -262,9 +262,3 @@ fig_map = px.choropleth(map_data,
     title="Ticket Distribution by Country")
 fig_map.update_geos(showcountries=True, showcountriesframe=False)
 st.plotly_chart(fig_map, use_container_width=True)
-
-Tengo este error:
-File "/mount/src/ticketstatus/App.py", line 1
-  iimport streamlit as st
-          ^
-SyntaxError: invalid syntax
