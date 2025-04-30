@@ -56,7 +56,7 @@ def load_data_from_excel(uploaded_file):
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
-       if "Client codes coding" not in df.columns:
+    if "Client codes coding" not in df.columns:
         st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
         st.stop()
 
