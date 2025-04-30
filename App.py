@@ -41,52 +41,42 @@ def safe_age(created_date):
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
+
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
-
-    created_col = [col for col in df.columns if "created" in col.lower()]
-    df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize() if created_col else pd.NaT
-
-    df["Age"] = df["Created"].apply(safe_age)
-    df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
-    df["Today"] = df["Age"] == 0
-    df["Yesterday"] = df["Age"] == 1
-    df["2 Days"] = df["Age"] == 2
-    df["+3 Days"] = df["Age"] >= 3
-    df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
-    df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
     if "Client codes coding" not in df.columns:
         st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
         st.stop()
+
+    created_col = [col for col in df.columns if "created" in col.lower()]
+    df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize() if created_col else pd.NaT
+    df["Age"] = df["Created"].apply(safe_age)
+    df["Today"] = df["Age"] == 0
+    df["Yesterday"] = df["Age"] == 1
+    df["2 Days"] = df["Age"] == 2
+    df["+3 Days"] = df["Age"] >= 3
+    df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
+    df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
+    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+    df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
     df["Client codes coding"] = df["Client codes coding"].astype(str)
     df["Country"] = df["Client codes coding"].str[:2]
     df["CompanyCode"] = df["Client codes coding"].str[-4:]
     df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
 
-    region_map = {
-        "NAMER": ["US", "CA"],
-        "LATAM": ["MX", "AR", "PE"],
-        "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
-        "AFRICA": ["AO", "ZA"],
-        "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
-    }
-    region_lookup = {code: region for region, codes in region_map.items() for code in codes}
+    region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
     df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
-    df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-    df["Age"] = df["Created"].apply(safe_age)
-    df["Today"] = df["Age"] == 0
-    df["Yesterday"] = df["Age"] == 1
-    df["2 Days"] = df["Age"] == 2
-    df["+3 Days"] = df["Age"] >= 3
-    df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
-    df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
-
+    return df
 
 def summarize(df):
+    required_cols = ["TowerGroup", "is_open", "Today", "Yesterday", "2 Days", "+3 Days"]
+    for col in required_cols:
+        if col not in df.columns:
+            st.warning(f"⚠️ Missing expected column: {col}")
+            return pd.DataFrame()
+
     return df.groupby("TowerGroup").agg(
         OPEN_TICKETS=("is_open", "sum"),
         Today=("Today", "sum"),
@@ -96,6 +86,7 @@ def summarize(df):
     ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
 def upload_to_firestore(df, batch_size=500):
+    df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
     df_clean = df.copy()
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -145,7 +136,14 @@ def download_from_firestore():
             rows.append(data)
         if not last_update and "timestamp" in data:
             last_update = data.get("timestamp")
-    return pd.DataFrame(rows), last_update
+
+    df = pd.DataFrame(rows)
+
+    if "Created" in df.columns:
+        df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
+        df["Age"] = df["Created"].apply(safe_age)
+
+    return df, last_update
 
 def to_excel(df):
     df_safe = df.copy()
@@ -185,7 +183,6 @@ if refresh:
 df, last_update = download_from_firestore()
 
 if not df.empty:
-    # Verifica columna de client
     if "Client codes coding" not in df.columns:
         st.error("❌ Missing 'Client codes coding' column in data. Cannot derive Country or Region.")
         st.stop()
@@ -195,14 +192,7 @@ if not df.empty:
     df["CompanyCode"] = df["Client codes coding"].str[-4:]
     df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
 
-    region_map = {
-        "NAMER": ["US", "CA"],
-        "LATAM": ["MX", "AR", "PE"],
-        "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
-        "AFRICA": ["AO", "ZA"],
-        "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
-    }
-    region_lookup = {code: region for region, codes in region_map.items() for code in codes}
+    region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
     df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
     df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
@@ -235,7 +225,6 @@ if not df.empty:
     sel_towers = st.sidebar.multiselect("Select Towers", summary["TOWER"].unique(), default=summary["TOWER"].unique())
     df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
     summary_filtered = summary[summary["TOWER"].isin(sel_towers)]
-
 
     if not df_graph.empty:
         st.subheader("📊 KPIs")
