@@ -21,6 +21,7 @@ REGION_MAPPING = {
     "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
 }
 
+# Firebase init
 if not firebase_admin._apps:
     raw_credentials = st.secrets["firebase_credentials"]
     firebase_credentials = json.loads(json.dumps(dict(raw_credentials)))
@@ -35,18 +36,15 @@ def safe_age(created_date):
         created = pd.to_datetime(created_date).tz_localize(None)
         today = pd.Timestamp("today").normalize()
         return (today - created.normalize()).days
-    except Exception:
+    except:
         return None
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip()
+
     created_col = [col for col in df.columns if "created" in col.lower()]
-    if created_col:
-        df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize()
-    else:
-        df["Created"] = pd.NaT
-        st.warning("No 'Created' column found.")
+    df["Created"] = pd.to_datetime(df[created_col[0]], errors="coerce").dt.normalize() if created_col else pd.NaT
 
     df["Age"] = df["Created"].apply(safe_age)
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
@@ -55,13 +53,7 @@ def load_data_from_excel(uploaded_file):
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-
-    if "Assigned to" in df.columns:
-        df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
-    else:
-        df["Is_Unassigned"] = False
-        st.warning("⚠️ Column 'Assigned to' not found.")
-
+    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
     if "Client codes coding" in df.columns:
@@ -69,7 +61,6 @@ def load_data_from_excel(uploaded_file):
         df["Country"] = df["Client codes coding"].str[:2]
         df["CompanyCode"] = df["Client codes coding"].str[-4:]
         df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
-
     return df
 
 def summarize(df):
@@ -86,7 +77,6 @@ def upload_to_firestore(df, batch_size=500):
     for col in df_clean.select_dtypes(include=["datetime", "datetimetz", "datetime64"]).columns:
         df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_clean = df_clean.where(pd.notnull(df_clean), None)
-
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(columns=[col], inplace=True)
@@ -101,7 +91,6 @@ def upload_to_firestore(df, batch_size=500):
     try:
         for doc in db.collection(COLLECTION_NAME).stream():
             doc.reference.delete()
-
         for i in range(total_batches):
             batch_df = df_clean.iloc[i * batch_size : (i + 1) * batch_size]
             db.collection(COLLECTION_NAME).document(f"batch_{i}").set({
@@ -121,17 +110,19 @@ def upload_to_firestore(df, batch_size=500):
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
 
-if "Client codes coding" in df.columns:
-    df["Client codes coding"] = df["Client codes coding"].astype(str)
-    df["Country"] = df["Client codes coding"].str[:2]
-    df["CompanyCode"] = df["Client codes coding"].str[-4:]
-    df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
-
-    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
-    df["Region"] = df["Country"].map(region_map).fillna("Other")
-else:
-    st.error("❌ 'Client codes coding' column not found in Firestore data.")
-    st.stop()
+def download_from_firestore():
+    docs = db.collection(COLLECTION_NAME).stream()
+    rows = []
+    last_update = None
+    for doc in docs:
+        data = doc.to_dict()
+        if "rows" in data:
+            rows.extend(data["rows"])
+        elif all(isinstance(v, (str, int, float, bool, type(None))) for v in data.values()):
+            rows.append(data)
+        if not last_update and "timestamp" in data:
+            last_update = data.get("timestamp")
+    return pd.DataFrame(rows), last_update
 
 def to_excel(df):
     df_safe = df.copy()
@@ -144,7 +135,7 @@ def to_excel(df):
         df_safe.to_excel(writer, index=False, sheet_name="Data")
     return output.getvalue()
 
-# ---- App UI ----
+# --- UI ---
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
@@ -181,6 +172,9 @@ if not df.empty:
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
 
+    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
+    df["Region"] = df["Country"].map(region_map).fillna("Other")
+
     st.sidebar.header("Filters")
     countries = sorted(df["Country"].dropna().unique())
     sel_country = st.sidebar.multiselect("Country", countries, default=countries)
@@ -188,8 +182,6 @@ if not df.empty:
     compatible_companies = df[df["Country"].isin(sel_country)]["CompanyCode"].unique()
     sel_company = st.sidebar.multiselect("Company Code", sorted(compatible_companies), default=sorted(compatible_companies))
 
-    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
-    df["Region"] = df["Country"].map(region_map).fillna("Other")
     sel_region = st.sidebar.multiselect("Region", sorted(set(region_map.values())), default=sorted(set(region_map.values())))
 
     df_filtered = df[
@@ -224,7 +216,6 @@ if not df.empty:
             ax1.pie(summary_filtered["OPEN_TICKETS"], labels=summary_filtered["TOWER"], autopct='%1.1f%%')
             ax1.axis('equal')
             st.pyplot(fig1)
-
         with col2:
             st.markdown("**🟠 Tickets Aged +3 Days by Tower**")
             fig2, ax2 = plt.subplots()
