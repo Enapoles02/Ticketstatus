@@ -121,21 +121,17 @@ def upload_to_firestore(df, batch_size=500):
     except Exception as e:
         st.error(f"❌ Firestore upload failed:\n\n{e}")
 
-def download_from_firestore():
-    docs = db.collection(COLLECTION_NAME).stream()
-    rows = []
-    last_update = None
+if "Client codes coding" in df.columns:
+    df["Client codes coding"] = df["Client codes coding"].astype(str)
+    df["Country"] = df["Client codes coding"].str[:2]
+    df["CompanyCode"] = df["Client codes coding"].str[-4:]
+    df["Country_Company"] = df["Country"] + "_" + df["CompanyCode"]
 
-    for doc in docs:
-        data = doc.to_dict()
-        if "rows" in data:
-            rows.extend(data["rows"])
-        elif all(isinstance(v, (str, int, float, bool, type(None))) for v in data.values()):
-            rows.append(data)
-        if not last_update and "timestamp" in data:
-            last_update = data.get("timestamp")
-
-    return pd.DataFrame(rows), last_update
+    region_map = {c: region for region, codes in REGION_MAPPING.items() for c in codes}
+    df["Region"] = df["Country"].map(region_map).fillna("Other")
+else:
+    st.error("❌ 'Client codes coding' column not found in Firestore data.")
+    st.stop()
 
 def to_excel(df):
     df_safe = df.copy()
