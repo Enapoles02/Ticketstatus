@@ -228,8 +228,6 @@ footer_text = f"""
 """
 st.markdown(footer_text, unsafe_allow_html=True)
 
-       ... (todo tu código anterior)
-
 st.subheader("🌍 Tickets by Region and Country (Interactive)")
 import altair as alt
 alt_data = df_graph.groupby(["Region", "Country"]).size().reset_index(name="Ticket Count")
