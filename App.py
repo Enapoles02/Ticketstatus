@@ -115,27 +115,23 @@ def upload_to_firestore(df, batch_size=500):
 
 
 def download_from_firestore():
-    meta_doc = db.collection(COLLECTION_NAME).document("meta_info").get()
-    if not meta_doc.exists:
-        return pd.DataFrame(), None
+    docs = db.collection(COLLECTION_NAME).stream()
+    rows = []
+    last_update = None
 
-    meta_info = meta_doc.to_dict()
-    total_batches = meta_info.get("total_batches", 0)
-    last_update_str = meta_info.get("last_update")
+    for doc in docs:
+        data = doc.to_dict()
+        # Excluye el documento que pueda tener información de conexión, etc.
+        if "rows" in data:
+            rows.extend(data["rows"])
+        elif all(isinstance(v, (str, int, float, bool, type(None))) for v in data.values()):
+            rows.append(data)
 
-    all_rows = []
-    for i in range(total_batches):
-        batch_doc = db.collection(COLLECTION_NAME).document(f"batch_{i}").get()
-        if batch_doc.exists:
-            batch_data = batch_doc.to_dict()
-            all_rows.extend(batch_data.get("rows", []))
+        # Si hay un campo de fecha lo usamos como referencia (opcional)
+        if not last_update and "Created" in data:
+            last_update = data.get("Created")
 
-    df_combined = pd.DataFrame(all_rows)
-
-    if "Created" in df_combined.columns:
-        df_combined["Created"] = pd.to_datetime(df_combined["Created"], errors="coerce")
-
-    return df_combined, last_update_str
+    return pd.DataFrame(rows), last_update
 
 def to_excel(df):
     df_safe = df.copy()
