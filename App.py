@@ -42,13 +42,6 @@ def load_data_from_excel(uploaded_file):
     if "Client Codes Coding" in df.columns:
         df["Country"] = df["Client Codes Coding"].astype(str).str[:2]
         df["CompanyCode"] = df["Client Codes Coding"].astype(str).str[-4:]
-
-        # Filtro: solo países permitidos
-        allowed_countries = ["CL", "AR", "MX", "PE", "PA", "GT", "CA", "US"]
-        df = df[df["Country"].isin(allowed_countries)]
-
-        if df.empty:
-            st.warning("⚠️ No records found for allowed countries: " + ", ".join(allowed_countries))
     else:
         df["Country"] = None
         df["CompanyCode"] = None
@@ -63,6 +56,14 @@ def load_data_from_excel(uploaded_file):
     df["Unassigned_Age"] = df.apply(lambda row: row["Age"] if row["Is_Unassigned"] else None, axis=1)
     return df
 
+def summarize(df):
+    return df.groupby("TowerGroup").agg(
+        OPEN_TICKETS=("is_open", "sum"),
+        Today=("Today", "sum"),
+        Yesterday=("Yesterday", "sum"),
+        **{"2 Days": ("2 Days", "sum")},
+        **{"+3 Days": ("+3 Days", "sum")}
+    ).reset_index().rename(columns={"TowerGroup": "TOWER"})
 
 def upload_to_firestore(df):
     df_clean = df.copy()
@@ -259,5 +260,11 @@ fig_map = px.choropleth(map_data,
     hover_name="Country",
     color_continuous_scale=px.colors.sequential.Blues,
     title="Ticket Distribution by Country")
-fig_map.update_geos(showcountries=True, showframe=False)
+fig_map.update_geos(showcountries=True, showcountriesframe=False)
 st.plotly_chart(fig_map, use_container_width=True)
+
+Tengo este error:
+File "/mount/src/ticketstatus/App.py", line 1
+  iimport streamlit as st
+          ^
+SyntaxError: invalid syntax
