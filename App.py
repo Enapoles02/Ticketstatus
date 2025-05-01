@@ -274,7 +274,7 @@ df_un = df_graph[df_graph["Is_Unassigned"]].sort_values("Unassigned_Age", ascend
 if not df_un.empty:
     st.dataframe(
         df_un[["Number", "Short description", "Created", "Age", "Unassigned_Age"]],
-        use_container-width=True, hide_index=True
+        use_container_width=True, hide_index=True
     )
     overdue = df_un[df_un["Unassigned_Age"] > 3].shape[0]
     if overdue:
