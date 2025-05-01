@@ -159,6 +159,7 @@ if df.empty:
     st.warning("No data loaded.")
     st.stop()
 
+# Dynamic flags recalculation
 df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
 df["Age"] = df["Created"].apply(safe_age)
 df["Today"] = df["Age"] == 0
@@ -168,6 +169,9 @@ df["+3 Days"] = df["Age"] >= 3
 df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
 df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
+# Ensure Region exists after reload
+if "Region" not in df.columns:
+    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
 # Sidebar Filters
 st.sidebar.header("Filters")
@@ -194,7 +198,7 @@ t_summary = summarize(df_filtered)
 st.sidebar.header("Graph Filters")
 sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
 df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
-t_summary = t_summary[t_summary["TowerGroup"].isin(sel_t_summary["TowerGroup"])]
+t_summary = t_summary[t_summary["TowerGroup"].isin(t_summary["TowerGroup"])]
 
 # KPIs
 st.subheader("📊 KPIs")
@@ -270,7 +274,7 @@ df_un = df_graph[df_graph["Is_Unassigned"]].sort_values("Unassigned_Age", ascend
 if not df_un.empty:
     st.dataframe(
         df_un[["Number", "Short description", "Created", "Age", "Unassigned_Age"]],
-        use_container_width=True, hide_index=True
+        use_container-width=True, hide_index=True
     )
     overdue = df_un[df_un["Unassigned_Age"] > 3].shape[0]
     if overdue:
