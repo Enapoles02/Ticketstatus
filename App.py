@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import datetime as dt
 import io
-import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
@@ -12,10 +11,7 @@ import altair as alt
 # Configuration & Secrets
 # ————————————————
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
-
-# Admin code from secrets (fallback to "ADMIN" if not set)
 ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
-
 COLLECTION_NAME = "aging_dashboard"
 DOCUMENT_ID = "latest_upload"
 ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
@@ -37,7 +33,7 @@ def safe_age(created_date):
         created = pd.to_datetime(created_date).normalize()
         today = pd.Timestamp("today").normalize()
         return (today - created).days
-    except Exception:
+    except:
         return None
 
 REGION_MAPPING = {
@@ -56,14 +52,12 @@ def validate_columns(df, cols):
         return False
     return True
 
-
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
-    req = ["Assignment group", "State", "Assigned to"]
-    if not validate_columns(df, req):
+    if not validate_columns(df, ["Assignment group", "State", "Assigned to"]):
         return pd.DataFrame()
-    # Created column
+    # Created
     created_cols = [c for c in df.columns if "created" in c.lower()]
     if created_cols:
         df["Created"] = pd.to_datetime(df[created_cols[0]], errors="coerce").dt.normalize()
@@ -96,28 +90,27 @@ def load_data_from_excel(uploaded_file):
     df["Region"] = df["Country"].map(region_lookup).fillna("Other")
     return df
 
-
 def summarize(df):
     return (
-        df.groupby("TowerGroup").agg(
-            OPEN_TICKETS=("is_open", "sum"),
-            Today=("Today", "sum"),
-            Yesterday=("Yesterday", "sum"),
-            **{"2 Days": ("2 Days", "sum")},
-            **{"+3 Days": ("+3 Days", "sum")}            
-        )
-        .reset_index()
-        .rename(columns={"TowerGroup": "TOWER"})
+        df.groupby("TowerGroup")
+          .agg(
+              OPEN_TICKETS=("is_open", "sum"),
+              Today=("Today", "sum"),
+              Yesterday=("Yesterday", "sum"),
+              **{"2 Days": ("2 Days", "sum")},
+              **{"+3 Days": ("+3 Days", "sum")}
+          )
+          .reset_index()
     )
-
-# Upload & Download Helpers
 
 def upload_to_firestore(df):
     df_clean = df.copy()
+    # drop non-serializable
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(col, axis=1, inplace=True)
             st.warning(f"⚠️ Dropped column '{col}' (no serializable).")
+    # format dates
     for c in df_clean.select_dtypes(include=["datetime", "datetimetz"]):
         df_clean[c] = df_clean[c].dt.strftime("%Y-%m-%d %H:%M:%S")
     df_clean = df_clean.where(pd.notnull(df_clean), None)
@@ -145,9 +138,11 @@ def to_excel(df):
 # ————————————————
 if "admin" not in st.session_state:
     st.session_state.admin = False
+
 st.title("📈 Tickets Aging Dashboard")
 if st.button("🔄 Refresh"):
     st.experimental_rerun()
+
 with st.expander("🔐 Administrator Access"):
     if not st.session_state.admin:
         pwd = st.text_input("Enter ADMIN Code", type="password")
@@ -163,13 +158,12 @@ with st.expander("🔐 Administrator Access"):
                 st.success("Database updated ✅")
                 st.experimental_rerun()
 
-# Load & Recalc
-
+# Load & recalc dynamic flags
 df, last_update = download_from_firestore()
 if df.empty:
     st.warning("No hay datos cargados aún.")
     st.stop()
-# Recalculate dynamic flags
+
 df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
 df["Age"] = df["Created"].apply(safe_age)
 df["Today"] = df["Age"] == 0
@@ -189,7 +183,6 @@ sel_country = st.sidebar.multiselect("Country", countries, default=countries)
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
 sel_assignment = st.sidebar.multiselect("Assignment group", assignments, default=assignments)
 
-# Apply filters
 df_filtered = df[
     df["Country"].isin(sel_country) &
     df["CompanyCode"].isin(sel_company) &
@@ -200,53 +193,38 @@ df_filtered = df[
 # Summary by Tower
 t_summary = summarize(df_filtered)
 st.sidebar.header("Graph Filters")
-sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TOWER"], default=t_summary["TOWER"])
+sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
 df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
-t_summary = t_summary[t_summary["TOWER"].isin(sel_towers)]
+t_summary = t_summary[t_summary["TowerGroup"].isin(sel_towers)]
 
 # KPIs
 st.subheader("📊 KPIs")
 total_open = int(df_graph["is_open"].sum())
 total_plus3 = int(df_graph["+3 Days"].sum())
 pct_overdue = (total_plus3 / total_open * 100) if total_open else 0
-k1, k2, k3 = st.columns(3)
-k1.metric("🎫 Open Tickets", total_open)
-k2.metric("🕑 +3 Days", total_plus3)
-k3.metric("📈 % Overdue", f"{pct_overdue:.1f}%")
+c1, c2, c3 = st.columns(3)
+c1.metric("🎫 Open Tickets", total_open)
+c2.metric("🕑 +3 Days", total_plus3)
+c3.metric("📈 % Overdue", f"{pct_overdue:.1f}%")
 
 # Summary by Tower Table
 st.subheader("📋 Summary by Tower")
 st.dataframe(t_summary, use_container_width=True, hide_index=True)
 
-# —— Summary by SGBS & Local ——
+# —— Status Overview by SGBS & Local grouped by Tower —— 
 sgbs_df = df_graph[df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False)]
-local_df = df_graph[~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False) & df_graph["Assignment group"].notna()]
+local_df = df_graph[
+    ~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False) &
+    df_graph["Assignment group"].notna()
+]
 
 if not sgbs_df.empty:
-    summary_sgbs = (
-        sgbs_df.groupby("Assignment group").agg(
-            OPEN_TICKETS=("is_open", "sum"),
-            Today=("Today", "sum"),
-            Yesterday=("Yesterday", "sum"),
-            **{"2 Days": ("2 Days", "sum")},
-            **{"+3 Days": ("+3 Days", "sum")}            
-        )
-        .reset_index()
-    )
+    summary_sgbs = summarize(sgbs_df)
     st.subheader("📋 Status Overview by SGBS")
     st.dataframe(summary_sgbs, use_container_width=True, hide_index=True)
 
 if not local_df.empty:
-    summary_local = (
-        local_df.groupby("Assignment group").agg(
-            OPEN_TICKETS=("is_open", "sum"),
-            Today=("Today", "sum"),
-            Yesterday=("Yesterday", "sum"),
-            **{"2 Days": ("2 Days", "sum")},
-            **{"+3 Days": ("+3 Days", "sum")}            
-        )
-        .reset_index()
-    )
+    summary_local = summarize(local_df)
     st.subheader("📋 Status Overview by Local")
     st.dataframe(summary_local, use_container_width=True, hide_index=True)
 
@@ -255,31 +233,28 @@ col1, col2 = st.columns(2)
 with col1:
     st.markdown("**🔵 Open Tickets by Tower**")
     fig1, ax1 = plt.subplots()
-    ax1.pie(t_summary["OPEN_TICKETS"], labels=t_summary["TOWER"], autopct='%1.1f%%')
+    ax1.pie(t_summary["OPEN_TICKETS"], labels=t_summary["TowerGroup"], autopct='%1.1f%%')
     ax1.axis('equal')
     st.pyplot(fig1)
 with col2:
     st.markdown("**🟠 Tickets +3 Days by Tower**")
     fig2, ax2 = plt.subplots()
-    ax2.pie(t_summary["+3 Days"], labels=t_summary["TOWER"], autopct='%1.1f%%')
+    ax2.pie(t_summary["+3 Days"], labels=t_summary["TowerGroup"], autopct='%1.1f%%')
     ax2.axis('equal')
     st.pyplot(fig2)
 
 # Status Overview by Tower
 st.subheader("📋 Status Overview by Tower")
 pivot_status = df_graph.pivot_table(
-    index="State",
-    columns="TowerGroup",
-    values="Created",
-    aggfunc="count",
-    fill_value=0
+    index="State", columns="TowerGroup", values="Created", aggfunc="count", fill_value=0
 ).astype(int)
 st.dataframe(pivot_status, use_container_width=True)
 
 # Download Filtered DB
 st.subheader("📥 Download Filtered DB")
 st.download_button(
-    "Download Excel", data=to_excel(df_graph),
+    "Download Excel",
+    data=to_excel(df_graph),
     file_name="Filtered_Tickets.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
@@ -313,12 +288,13 @@ if not df_un.empty:
     st.subheader("👁️ Unassigned Drilldown")
     st.dataframe(df_un, use_container_width=True)
     st.download_button(
-        "Download Unassigned", data=to_excel(df_un),
+        "Download Unassigned",
+        data=to_excel(df_un),
         file_name="Unassigned_Tickets.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# Footer with last update
+# Footer
 footer = f"""
 <div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
         padding:6px; font-size:0.75rem; color:#888; background:#f8f8f8;">
