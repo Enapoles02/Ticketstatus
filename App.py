@@ -317,11 +317,17 @@ st.altair_chart(chart, use_container_width=True)
 
 # Map Visualization
 st.subheader("🗺️ Tickets by Country (Map)")
-from vega_datasets import data as vega_data
-world = alt.topo_feature(vega_data.world_110m.url, 'countries')
+
+# Cargar GeoJSON mundial directamente
+def_world_json = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'
+world = alt.topo_feature(def_world_json, 'countries')
+
 map_chart = alt.Chart(world).mark_geoshape().encode(
     color=alt.Color('Ticket Count:Q', title='Tickets'),
-    tooltip=[alt.Tooltip('properties.name:N', title='Country'), 'Ticket Count:Q']
+    tooltip=[
+        alt.Tooltip('properties.name:N', title='Country'),
+        alt.Tooltip('Ticket Count:Q')
+    ]
 ).transform_lookup(
     lookup='properties.iso_a2',
     from_=alt.LookupData(alt_data, 'Country', ['Ticket Count'])
@@ -331,4 +337,5 @@ map_chart = alt.Chart(world).mark_geoshape().encode(
     width=800,
     height=400
 )
+
 st.altair_chart(map_chart, use_container_width=True)
