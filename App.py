@@ -281,11 +281,21 @@ st.markdown(footer,unsafe_allow_html=True)
 
 # Interactive Region Chart
 st.subheader("🌍 Tickets by Region and Country (Interactive)")
-alt_data = df_graph.groupby(["Region","Country"]).size().reset_index(name="Ticket Count")
+
+# ————————————————
+# Asegurarnos de que exista la columna Region
+if "Region" not in df_graph.columns:
+    df_graph["Region"] = df_graph["Country"].map(region_lookup).fillna("Other")
+# ————————————————
+
+alt_data = df_graph.groupby(["Region","Country"]) \
+                   .size() \
+                   .reset_index(name="Ticket Count")
 chart = alt.Chart(alt_data).mark_bar().encode(
-    x=alt.X("Country:N",sort="-y"),
+    x=alt.X("Country:N", sort="-y"),
     y="Ticket Count:Q",
     color="Region:N",
     tooltip=["Region","Country","Ticket Count"]
 )
-st.altair_chart(chart,use_container_width=True)
+st.altair_chart(chart, use_container_width=True)
+
