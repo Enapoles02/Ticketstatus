@@ -18,8 +18,8 @@ ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
 # Initialize Firebase only once
 if not firebase_admin._apps:
-    raw_secrets = st.secrets["firebase_credentials"]
-    cred = credentials.Certificate(raw_secrets)
+    creds = st.secrets["firebase_credentials"]
+    cred = credentials.Certificate(creds)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -28,8 +28,7 @@ db = firestore.client()
 # ————————————————
 def safe_age(created_date):
     try:
-        if pd.isna(created_date):
-            return None
+        if pd.isna(created_date): return None
         created = pd.to_datetime(created_date).normalize()
         today = pd.Timestamp("today").normalize()
         return (today - created).days
@@ -48,23 +47,19 @@ region_lookup = {code: region for region, codes in REGION_MAPPING.items() for co
 def validate_columns(df, cols):
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        st.error(f"❌ Archivo inválido, faltan columnas: {', '.join(missing)}")
+        st.error(f"❌ Missing columns: {', '.join(missing)}")
         return False
     return True
+
 
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
     if not validate_columns(df, ["Assignment group", "State", "Assigned to"]):
         return pd.DataFrame()
-    # Created
+    # Created & Age
     created_cols = [c for c in df.columns if "created" in c.lower()]
-    if created_cols:
-        df["Created"] = pd.to_datetime(df[created_cols[0]], errors="coerce").dt.normalize()
-    else:
-        df["Created"] = pd.NaT
-        st.warning("⚠️ Columna 'Created' no encontrada; valores nulos.")
-    # Age flags
+    df["Created"] = pd.to_datetime(df[created_cols[0]] if created_cols else None, errors="coerce").dt.normalize()
     df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
@@ -81,56 +76,56 @@ def load_data_from_excel(uploaded_file):
     else:
         df["Country"] = None
         df["CompanyCode"] = None
-        st.warning("⚠️ 'Client Codes Coding' no encontrada.")
+        st.warning("⚠️ 'Client Codes Coding' missing.")
     # Status & Unassigned
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
     # Region
     df["Region"] = df["Country"].map(region_lookup).fillna("Other")
     return df
 
+
 def summarize(df):
     return (
-        df.groupby("TowerGroup")
-          .agg(
-              OPEN_TICKETS=("is_open", "sum"),
-              Today=("Today", "sum"),
-              Yesterday=("Yesterday", "sum"),
-              **{"2 Days": ("2 Days", "sum")},
-              **{"+3 Days": ("+3 Days", "sum")}
-          )
-          .reset_index()
+        df.groupby("TowerGroup").agg(
+            OPEN_TICKETS=("is_open", "sum"),
+            Today=("Today", "sum"),
+            Yesterday=("Yesterday", "sum"),
+            **{"2 Days": ("2 Days", "sum")},
+            **{"+3 Days": ("+3 Days", "sum")}    
+        )
+        .reset_index()
     )
+
 
 def upload_to_firestore(df):
     df_clean = df.copy()
-    # drop non-serializable
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(col, axis=1, inplace=True)
-            st.warning(f"⚠️ Dropped column '{col}' (no serializable).")
-    # format dates
+            st.warning(f"⚠️ Dropped '{col}' (non-serializable)")
     for c in df_clean.select_dtypes(include=["datetime", "datetimetz"]):
         df_clean[c] = df_clean[c].dt.strftime("%Y-%m-%d %H:%M:%S")
     df_clean = df_clean.where(pd.notnull(df_clean), None)
-    data_json = df_clean.to_dict(orient="records")
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
-        "data": data_json,
+        "data": df_clean.to_dict(orient="records"),
         "last_update": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     })
+
 
 def download_from_firestore():
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
     if doc.exists:
-        content = doc.to_dict()
-        return pd.DataFrame(content.get("data", [])), content.get("last_update")
+        c = doc.to_dict()
+        return pd.DataFrame(c.get("data", [])), c.get("last_update")
     return pd.DataFrame(), None
+
 
 def to_excel(df):
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Data")
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        df.to_excel(w, index=False, sheet_name="Data")
     return buf.getvalue()
 
 # ————————————————
@@ -150,18 +145,18 @@ with st.expander("🔐 Administrator Access"):
             st.session_state.admin = True
             st.success("Admin mode enabled ✅")
     else:
-        uploaded = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
-        if uploaded:
-            df_new = load_data_from_excel(uploaded)
+        up = st.file_uploader("Upload Excel file", type=["xlsx", "xls"])
+        if up:
+            df_new = load_data_from_excel(up)
             if not df_new.empty:
                 upload_to_firestore(df_new)
                 st.success("Database updated ✅")
                 st.experimental_rerun()
 
-# Load & recalc dynamic flags
+# Load & recalc
 df, last_update = download_from_firestore()
 if df.empty:
-    st.warning("No hay datos cargados aún.")
+    st.warning("No data loaded.")
     st.stop()
 
 df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
@@ -171,32 +166,27 @@ df["Yesterday"] = df["Age"] == 1
 df["2 Days"] = df["Age"] == 2
 df["+3 Days"] = df["Age"] >= 3
 df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].astype(str).str.strip() == "")
+df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
 df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
 
 # Sidebar Filters
 st.sidebar.header("Filters")
-
-# 1) Filtro principal: Region
+# 1) Region filter
 regions = sorted(df["Region"].dropna().unique())
 sel_region = st.sidebar.multiselect("Region", regions, default=regions)
-
-# 2) Sobre el df completo, filtramos por la región seleccionada
+# 2) Filter by selected regions
 df_reg = df[df["Region"].isin(sel_region)]
-
-# 3) Luego obtenemos países y company codes solo de esas regiones
+# 3) Country & CompanyCode based on region
 countries = sorted(df_reg["Country"].dropna().unique())
 companies = sorted(df_reg["CompanyCode"].dropna().unique())
-
 sel_country = st.sidebar.multiselect("Country", countries, default=countries)
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
-
-# 4) Aplicamos todos los filtros juntos al df original
+# 4) Apply filters
 df_filtered = df[
     df["Region"].isin(sel_region) &
     df["Country"].isin(sel_country) &
     df["CompanyCode"].isin(sel_company) &
-    df["TowerGroup"].isin(ALLOWED_TOWERS) &
+    df["TowerGroup"].isin(ALLOWED_TOWERS)
 ]
 
 # Summary by Tower
@@ -204,7 +194,7 @@ t_summary = summarize(df_filtered)
 st.sidebar.header("Graph Filters")
 sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
 df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
-t_summary = t_summary[t_summary["TowerGroup"].isin(sel_towers)]
+t_summary = t_summary[t_summary["TowerGroup"].isin(sel_t_summary["TowerGroup"])]
 
 # KPIs
 st.subheader("📊 KPIs")
@@ -220,18 +210,13 @@ c3.metric("📈 % Overdue", f"{pct_overdue:.1f}%")
 st.subheader("📋 Summary by Tower")
 st.dataframe(t_summary, use_container_width=True, hide_index=True)
 
-# —— Status Overview by SGBS & Local grouped by Tower —— 
+# Status Overview by SGBS & Local grouped by Tower
 sgbs_df = df_graph[df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False)]
-local_df = df_graph[
-    ~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False) &
-    df_graph["Assignment group"].notna()
-]
-
+local_df = df_graph[~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False) & df_graph["Assignment group"].notna()]
 if not sgbs_df.empty:
     summary_sgbs = summarize(sgbs_df)
     st.subheader("📋 Status Overview by SGBS")
     st.dataframe(summary_sgbs, use_container_width=True, hide_index=True)
-
 if not local_df.empty:
     summary_local = summarize(local_df)
     st.subheader("📋 Status Overview by Local")
@@ -262,9 +247,7 @@ st.dataframe(pivot_status, use_container_width=True)
 # Download Filtered DB
 st.subheader("📥 Download Filtered DB")
 st.download_button(
-    "Download Excel",
-    data=to_excel(df_graph),
-    file_name="Filtered_Tickets.xlsx",
+    "Download Excel", data=to_excel(df_graph), file_name="Filtered_Tickets.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
@@ -272,14 +255,12 @@ st.download_button(
 st.subheader("👁️ Ticket Drilldown")
 sel = st.selectbox("Select Tower", df_graph["TowerGroup"].unique())
 df_tower = df_graph[df_graph["TowerGroup"] == sel]
-state_f = st.multiselect("Filter by State", df_tower["State"].unique())
-if state_f:
-    df_tower = df_tower[df_tower["State"].isin(state_f)]
+state_filt = st.multiselect("Filter by State", df_tower["State"].unique())
+if state_filt:
+    df_tower = df_tower[df_tower["State"].isin(state_filt)]
 st.dataframe(df_tower, use_container_width=True)
 st.download_button(
-    f"Download Tickets {sel}",
-    data=to_excel(df_tower),
-    file_name=f"Tickets_{sel}.xlsx",
+    f"Download Tickets {sel}", data=to_excel(df_tower), file_name=f"Tickets_{sel}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 
@@ -297,13 +278,11 @@ if not df_un.empty:
     st.subheader("👁️ Unassigned Drilldown")
     st.dataframe(df_un, use_container_width=True)
     st.download_button(
-        "Download Unassigned",
-        data=to_excel(df_un),
-        file_name="Unassigned_Tickets.xlsx",
+        "Download Unassigned", data=to_excel(df_un), file_name="Unassigned_Tickets.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# Footer
+# Footer with last update
 footer = f"""
 <div style="position:fixed; bottom:0; left:0; width:100%; text-align:center;
         padding:6px; font-size:0.75rem; color:#888; background:#f8f8f8;">
