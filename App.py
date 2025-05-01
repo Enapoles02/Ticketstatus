@@ -176,14 +176,26 @@ df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else No
 
 # Sidebar Filters
 st.sidebar.header("Filters")
-countries = sorted(df["Country"].dropna().unique())
-companies = sorted(df["CompanyCode"].dropna().unique())
-assignments = df["Assignment group"].unique()
+
+# 1) Filtro principal: Region
+regions = sorted(df["Region"].dropna().unique())
+sel_region = st.sidebar.multiselect("Region", regions, default=regions)
+
+# 2) Sobre el df completo, filtramos por la región seleccionada
+df_reg = df[df["Region"].isin(sel_region)]
+
+# 3) Luego obtenemos países y company codes solo de esas regiones
+countries = sorted(df_reg["Country"].dropna().unique())
+companies = sorted(df_reg["CompanyCode"].dropna().unique())
+assignments = df_reg["Assignment group"].unique()
+
 sel_country = st.sidebar.multiselect("Country", countries, default=countries)
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
 sel_assignment = st.sidebar.multiselect("Assignment group", assignments, default=assignments)
 
+# 4) Aplicamos todos los filtros juntos al df original
 df_filtered = df[
+    df["Region"].isin(sel_region) &
     df["Country"].isin(sel_country) &
     df["CompanyCode"].isin(sel_company) &
     df["TowerGroup"].isin(ALLOWED_TOWERS) &
