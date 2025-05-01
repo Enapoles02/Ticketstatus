@@ -175,17 +175,24 @@ if "Region" not in df.columns:
 
 # Sidebar Filters
 st.sidebar.header("Filters")
+
 # 1) Region filter
 regions = sorted(df["Region"].dropna().unique())
 sel_region = st.sidebar.multiselect("Region", regions, default=regions)
+
 # 2) Filter by selected regions
 df_reg = df[df["Region"].isin(sel_region)]
-# 3) Country & CompanyCode based on region
+
+# 3) Country based on region
 countries = sorted(df_reg["Country"].dropna().unique())
-companies = sorted(df_reg["CompanyCode"].dropna().unique())
 sel_country = st.sidebar.multiselect("Country", countries, default=countries)
+
+# 4) Company Code based on selected countries
+df_country = df_reg[df_reg["Country"].isin(sel_country)]
+companies = sorted(df_country["CompanyCode"].dropna().unique())
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
-# 4) Apply filters
+
+# 5) Apply filters
 df_filtered = df[
     df["Region"].isin(sel_region) &
     df["Country"].isin(sel_country) &
