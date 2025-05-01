@@ -314,3 +314,21 @@ chart = alt.Chart(alt_data).mark_bar().encode(
     tooltip=["Region", "Country", "Ticket Count"]
 )
 st.altair_chart(chart, use_container_width=True)
+
+# Map Visualization
+st.subheader("🗺️ Tickets by Country (Map)")
+from vega_datasets import data as vega_data
+world = alt.topo_feature(vega_data.world_110m.url, 'countries')
+map_chart = alt.Chart(world).mark_geoshape().encode(
+    color=alt.Color('Ticket Count:Q', title='Tickets'),
+    tooltip=[alt.Tooltip('properties.name:N', title='Country'), 'Ticket Count:Q']
+).transform_lookup(
+    lookup='properties.iso_a2',
+    from_=alt.LookupData(alt_data, 'Country', ['Ticket Count'])
+).project(
+    type='equalEarth'
+).properties(
+    width=800,
+    height=400
+)
+st.altair_chart(map_chart, use_container_width=True)
