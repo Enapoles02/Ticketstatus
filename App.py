@@ -2,59 +2,47 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 import json
+import ast
 import traceback
-
-# Ajusta esta ruta si tu JSON está en otro lugar
-SERVICE_ACCOUNT_PATH = "/mnt/data/rewardschp-firebase-adminsdk-fbsvc-f636826040.json"
-COLLECTION_NAME = "aging_dashboard"
-DOCUMENT_ID = "latest_upload"
 
 def debug_firebase():
     with st.expander("🔍 Debug Firebase Connection"):
         try:
-            # 1) Intentar cargar credenciales desde secrets
-            raw = st.secrets.get("firebase_credentials")
-            if raw is None:
-                st.warning("⚠️ st.secrets['firebase_credentials'] no encontrada.")
-                raise ValueError("No secrets")
-
-            # Si viene como string JSON, parsearlo; si ya es dict, usarlo
-            creds = json.loads(raw) if isinstance(raw, str) else raw
-            
-            # Mostrar keys (private_key enmascarada)
-            masked = {k: ("***" if k=="private_key" else creds[k]) for k in creds}
-            st.write("🔑 Secrets as dict:", masked)
-
-            # 2) Intentar inicializar con dict
-            try:
-                firebase_admin.initialize_app(credentials.Certificate(creds))
-                st.success("🚀 Firebase initialized using dict creds")
-            except ValueError as e_dict:
-                st.warning(f"❗ Failed initializing with dict: {e_dict}")
-
-                # 3) Fallback: intentar usar el archivo JSON en disco
+            raw = st.secrets["firebase_credentials"]
+            # Si viene como string, intentar JSON, si falla, literal_eval
+            if isinstance(raw, str):
                 try:
-                    firebase_admin.initialize_app(credentials.Certificate(SERVICE_ACCOUNT_PATH))
-                    st.success(f"🚀 Firebase initialized using file {SERVICE_ACCOUNT_PATH}")
-                except Exception as e_file:
-                    st.error(f"❌ Failed initializing with file: {e_file}")
-                    st.text(traceback.format_exc())
-                    return
+                    creds = json.loads(raw)
+                    st.info("Parsed secrets as JSON")
+                except json.JSONDecodeError:
+                    creds = ast.literal_eval(raw)
+                    st.info("Parsed secrets via literal_eval")
+            else:
+                creds = raw
+                st.info("Secrets already a dict")
 
-            # 4) Crear cliente Firestore y probar lectura
+            # Mostrar keys (ocultar private_key)
+            masked = {k: ("***" if k == "private_key" else creds[k]) for k in creds}
+            st.write("🔑 Credentials dict:", masked)
+
+            # Inicializar app
+            if not firebase_admin._apps:
+                firebase_admin.initialize_app(credentials.Certificate(creds))
+                st.success("🚀 Firebase initialized with dict creds")
+            else:
+                st.info("ℹ️ Firebase app already initialized")
+
+            # Firestore client y prueba
             db = firestore.client()
             st.success("📡 Firestore client created")
-
-            doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
+            doc = db.collection("aging_dashboard").document("latest_upload").get()
             st.write("📄 Document exists?", doc.exists)
             if doc.exists:
-                sample = doc.to_dict().get("data", [])[:3]
-                st.write("🗂 Sample records:", sample)
+                st.write("🗂 Sample data:", doc.to_dict().get("data", [])[:3])
 
         except Exception as e:
-            st.error("⚠️ Unexpected debug error:")
+            st.error("❌ Firebase Debug Error:")
             st.text(str(e))
             st.text(traceback.format_exc())
 
-# LLama a la función en tu flujo de UI
 debug_firebase()
