@@ -3,34 +3,37 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import traceback
 
-def diagnose_and_fix_firebase():
-    st.write("🔍 **Diagnóstico de `firebase_credentials`**")
-    creds = st.secrets["firebase_credentials"]
-    st.write("• Tipo original de `creds`:", type(creds))
+def inspect_and_fix_key():
+    # 1) Obtén el AttrDict y conviértelo a dict
+    creds_attr = st.secrets["firebase_credentials"]
+    creds = creds_attr.to_dict() if hasattr(creds_attr, "to_dict") else creds_attr
 
-    if hasattr(creds, "to_dict"):
-        creds_dict = creds.to_dict()
-        st.write("• Tras `to_dict()`, tipo:", type(creds_dict))
-    else:
-        creds_dict = creds
-        st.write("• No había `to_dict()`, usamos `creds` directo")
+    # 2) Extrae el private_key y muestra su contenido crudo
+    key = creds.get("private_key", "")
+    st.write("📋 repr(private_key):", repr(key))
+    st.write("🔢 Saltos de línea reales:", key.count("\n"))
+    st.write("🔢 Secuencias literales '\\n':", key.count("\\n"))
 
-    st.write("🔍 **Intentando inicializar con el dict puro…**")
+    # 3) Si hay '\n' literales, los convertimos a saltos de línea reales
+    if "\\n" in key:
+        st.info("⚙️ Detectadas secuencias '\\n', convirtiendo a saltos reales")
+        key = key.replace("\\n", "\n")
+        creds["private_key"] = key
+
+    st.write("🔄 Tras conversión, saltos de línea reales:", key.count("\n"))
+
+    # 4) Intento de crear el Certificate y mostrar stack si falla
     try:
-        # Aquí es donde antes fallaba si pasabas el AttrDict
-        cert = credentials.Certificate(creds_dict)
+        cert = credentials.Certificate(creds)
+        st.success("✅ credentials.Certificate aceptó el dict")
+        # (opcional) inicializas la app y pruebas Firestore
         firebase_admin.initialize_app(cert)
-        st.success("✅ Firebase inicializado CORRECTAMENTE usando `to_dict()`")
-        
-        # Prueba rápida de Firestore
         db = firestore.client()
         doc = db.collection("aging_dashboard").document("latest_upload").get()
         st.write("📄 Document exists?", doc.exists)
     except Exception as e:
-        st.error("❌ Sigue fallando al inicializar:")
+        st.error("❌ Error al crear Certificate o inicializar:")
         st.text(str(e))
         st.text(traceback.format_exc())
 
-st.title("Diagnóstico y Corrección Firebase")
-if st.button("🔧 Diagnosticar y Corregir"):
-    diagnose_and_fix_firebase()
+st.button("🔍 Inspeccionar y arreglar private_key") and inspect_and_fix_key()
