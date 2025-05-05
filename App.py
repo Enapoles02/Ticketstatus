@@ -1,48 +1,35 @@
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
-import json
-import ast
 import traceback
 
-def debug_firebase():
-    with st.expander("🔍 Debug Firebase Connection"):
-        try:
-            raw = st.secrets["firebase_credentials"]
-            # Si viene como string, intentar JSON, si falla, literal_eval
-            if isinstance(raw, str):
-                try:
-                    creds = json.loads(raw)
-                    st.info("Parsed secrets as JSON")
-                except json.JSONDecodeError:
-                    creds = ast.literal_eval(raw)
-                    st.info("Parsed secrets via literal_eval")
-            else:
-                creds = raw
-                st.info("Secrets already a dict")
+def diagnose_firebase_secret():
+    st.write("🔍 **Diagnóstico de `firebase_credentials`**")
+    creds = st.secrets.get("firebase_credentials")
+    st.write("**Tipo de secret:**", type(creds))
+    
+    if isinstance(creds, dict):
+        st.write("**Claves disponibles:**", list(creds.keys()))
+        private_key = creds.get("private_key", "")
+        st.write("• ¿`private_key` es str?", isinstance(private_key, str))
+        st.write("• Primeros 100 caracteres de `private_key`:", repr(private_key[:100]))
+        st.write("• Número de saltos de línea en `private_key`:", private_key.count("\n"))
+        st.write("• ¿Empieza con '-----BEGIN'?", private_key.strip().startswith("-----BEGIN"))
+        st.write("• ¿Termina con 'END PRIVATE KEY-----'?", private_key.strip().endswith("-----END PRIVATE KEY-----"))
+    else:
+        st.write("**Valor completo de secret:**", repr(creds))
 
-            # Mostrar keys (ocultar private_key)
-            masked = {k: ("***" if k == "private_key" else creds[k]) for k in creds}
-            st.write("🔑 Credentials dict:", masked)
+    st.write("\n🔍 **Intentando inicializar Firebase…**")
+    try:
+        cred = credentials.Certificate(creds)
+        firebase_admin.initialize_app(cred)
+        st.success("✅ Firebase inicializado sin errores")
+    except Exception as e:
+        st.error("❌ Error al crear Certificate o inicializar App:")
+        st.text(str(e))
+        st.text(traceback.format_exc())
 
-            # Inicializar app
-            if not firebase_admin._apps:
-                firebase_admin.initialize_app(credentials.Certificate(creds))
-                st.success("🚀 Firebase initialized with dict creds")
-            else:
-                st.info("ℹ️ Firebase app already initialized")
-
-            # Firestore client y prueba
-            db = firestore.client()
-            st.success("📡 Firestore client created")
-            doc = db.collection("aging_dashboard").document("latest_upload").get()
-            st.write("📄 Document exists?", doc.exists)
-            if doc.exists:
-                st.write("🗂 Sample data:", doc.to_dict().get("data", [])[:3])
-
-        except Exception as e:
-            st.error("❌ Firebase Debug Error:")
-            st.text(str(e))
-            st.text(traceback.format_exc())
-
-debug_firebase()
+# En tu flujo de Streamlit:
+st.title("Debug Firebase")
+if st.button("🔧 Diagnosticar Firebase"):
+    diagnose_firebase_secret()
