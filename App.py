@@ -1,28 +1,36 @@
 import streamlit as st
-from firebase_admin import credentials
-import inspect
+import firebase_admin
+from firebase_admin import credentials, firestore
+import traceback
 
-def why_certificate_fails():
+def diagnose_and_fix_firebase():
+    st.write("🔍 **Diagnóstico de `firebase_credentials`**")
     creds = st.secrets["firebase_credentials"]
-    
-    st.write("1. Tipo de `creds`:", type(creds))
-    st.write("2. ¿`isinstance(creds, dict)`?", isinstance(creds, dict))
-    st.write("3. ¿`issubclass(type(creds), dict)`?", issubclass(type(creds), dict))
-    st.write("4. ¿Tiene método `to_dict`?", hasattr(creds, "to_dict"))
-    
-    if hasattr(creds, "to_dict"):
-        plain = creds.to_dict()
-        st.write("5. Tras `creds.to_dict()`, tipo:", type(plain))
-        st.write("   Claves:", list(plain.keys()))
-    
-    st.write("6. Firma de Certificate():", inspect.signature(credentials.Certificate))
-    
-    try:
-        # Intento directo: esto es lo que falla
-        credentials.Certificate(creds)
-        st.success("✅ Esta línea NO debería llegar si `creds` no es dict")
-    except Exception as e:
-        st.error("❌ Aquí está el error al llamar a Certificate():")
-        st.text(str(e))
+    st.write("• Tipo original de `creds`:", type(creds))
 
-st.button("🔍 ¿Por qué falla Certificate?") and why_certificate_fails()
+    if hasattr(creds, "to_dict"):
+        creds_dict = creds.to_dict()
+        st.write("• Tras `to_dict()`, tipo:", type(creds_dict))
+    else:
+        creds_dict = creds
+        st.write("• No había `to_dict()`, usamos `creds` directo")
+
+    st.write("🔍 **Intentando inicializar con el dict puro…**")
+    try:
+        # Aquí es donde antes fallaba si pasabas el AttrDict
+        cert = credentials.Certificate(creds_dict)
+        firebase_admin.initialize_app(cert)
+        st.success("✅ Firebase inicializado CORRECTAMENTE usando `to_dict()`")
+        
+        # Prueba rápida de Firestore
+        db = firestore.client()
+        doc = db.collection("aging_dashboard").document("latest_upload").get()
+        st.write("📄 Document exists?", doc.exists)
+    except Exception as e:
+        st.error("❌ Sigue fallando al inicializar:")
+        st.text(str(e))
+        st.text(traceback.format_exc())
+
+st.title("Diagnóstico y Corrección Firebase")
+if st.button("🔧 Diagnosticar y Corregir"):
+    diagnose_and_fix_firebase()
