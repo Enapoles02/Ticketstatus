@@ -1,42 +1,34 @@
-import firebase_admin
-from firebase_admin import credentials, firestore
-import traceback
-
-def test_firebase_connection():
+# ————————————————
+# Debug Firebase (Streamlit)
+# ————————————————
+with st.expander("🔍 Debug Firebase Connection"):
     try:
-        # 1. Cargar credenciales (ajusta si las tomas de st.secrets u otro JSON)
-        cred_dict = {
-            # copia aquí tu st.secrets["firebase_credentials"] o carga desde archivo
-            "type": "...",
-            "project_id": "...",
-            # ...
-        }
-        cred = credentials.Certificate(cred_dict)
-        print("🔑 Credentials loaded successfully")
+        # 1) Obtener crendenciales desde st.secrets
+        raw = st.secrets["firebase_credentials"]
+        st.write("🔑 Credenciales cargadas:")
+        st.json(raw)  # muestra solo las claves, no el private_key completo
         
-        # 2. Inicializar app (si ya existe, omitir inicializar de nuevo)
+        # 2) Inicializar app (si no está ya)
         if not firebase_admin._apps:
-            firebase_admin.initialize_app(cred)
-            print("🚀 Firebase app initialized")
+            cred_dbg = credentials.Certificate(raw)
+            firebase_admin.initialize_app(cred_dbg)
+            st.success("🚀 Firebase app initialized")
         else:
-            print("ℹ️ Firebase app already initialized")
+            st.info("ℹ️ Firebase app already initialized")
         
-        # 3. Crear cliente de Firestore
-        db = firestore.client()
-        print("📡 Firestore client created")
+        # 3) Crear cliente Firestore y probar lectura
+        db_dbg = firestore.client()
+        st.success("📡 Firestore client created")
         
-        # 4. Hacer una lectura de prueba
-        doc = db.collection("aging_dashboard").document("latest_upload").get()
-        print(f"📄 Documento 'latest_upload' existe? {doc.exists}")
+        doc = db_dbg.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
+        st.write(f"📄 Document exists? {doc.exists}")
         if doc.exists:
-            data = doc.to_dict()
-            print("🗂️ Ejemplo de contenido:", list(data.keys())[:5], "...")
+            sample = doc.to_dict().get("data", [])[:3]
+            st.write("🗂️ Sample data records:", sample)
         else:
-            print("⚠️ El documento no existe aún (quizá nunca subiste datos)")
-        
+            st.warning("⚠️ Document not found; quizás no has subido datos aún.")
     except Exception as e:
-        print("❌ Error en la conexión a Firebase:")
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    test_firebase_connection()
+        st.error("❌ Firebase Debug Error:")
+        st.text(str(e))
+        import traceback
+        st.text(traceback.format_exc())
