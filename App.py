@@ -126,7 +126,6 @@ def upload_to_firestore(df):
         "data": df_clean.to_dict(orient="records"),
        now_cdmx = datetime.now(MEXICO_TZ)
 "last_update": now_cdmx.strftime("%Y-%m-%d %H:%M:%S %Z")
-
     })
 
 def download_from_firestore():
