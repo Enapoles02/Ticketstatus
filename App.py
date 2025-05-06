@@ -6,22 +6,20 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 import altair as alt
-
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-# define la zona de CDMX
-MEXICO_TZ = ZoneInfo("America/Mexico_City")
-
 
 # ————————————————
 # Configuration & Secrets
 # ————————————————
 st.set_page_config(page_title="Tickets Dashboard", page_icon="📈", layout="wide")
-ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
+ADMIN_CODE     = st.secrets.get("admin_code", "ADMIN")
 COLLECTION_NAME = "aging_dashboard"
-DOCUMENT_ID = "latest_upload"
-ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
+DOCUMENT_ID     = "latest_upload"
+ALLOWED_TOWERS  = ["MDM", "P2P", "O2C", "R2R"]
+
+# Zona horaria de Ciudad de México
+MEXICO_TZ = ZoneInfo("America/Mexico_City")
 
 # Initialize Firebase only once
 if not firebase_admin._apps:
@@ -36,9 +34,11 @@ db = firestore.client()
 # ————————————————
 def safe_age(created_date):
     try:
-        if pd.isna(created_date): return None
-        created = pd.to_datetime(created_date).normalize()
-        today = pd.Timestamp("today").normalize()
+        if pd.isna(created_date):
+            return None
+        # Normalizar y asignar zona
+        created = pd.to_datetime(created_date).tz_localize(MEXICO_TZ).normalize()
+        today   = pd.Timestamp.now(tz=MEXICO_TZ).normalize()
         return (today - created).days
     except:
         return None
@@ -46,11 +46,13 @@ def safe_age(created_date):
 REGION_MAPPING = {
     "NAMER": ["US", "CA"],
     "LATAM": ["MX", "AR", "PE", "GT", "PA", "CL"],
-    "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
+    "EUR":   ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"],
     "AFRICA": ["AO", "ZA"],
     "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
 }
-region_lookup = {code: region for region, codes in REGION_MAPPING.items() for code in codes}
+region_lookup = {code: region
+                 for region, codes in REGION_MAPPING.items()
+                 for code in codes}
 
 def validate_columns(df, cols):
     missing = [c for c in cols if c not in df.columns]
@@ -71,11 +73,11 @@ def load_data_from_excel(uploaded_file):
         df[created_cols[0]] if created_cols else None,
         errors="coerce"
     ).dt.normalize()
-    df["Age"] = df["Created"].apply(safe_age)
-    df["Today"] = df["Age"] == 0
+    df["Age"]       = df["Created"].apply(safe_age)
+    df["Today"]     = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
-    df["2 Days"] = df["Age"] == 2
-    df["+3 Days"] = df["Age"] >= 3
+    df["2 Days"]    = df["Age"] == 2
+    df["+3 Days"]   = df["Age"] >= 3
 
     # TowerGroup
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
@@ -83,50 +85,55 @@ def load_data_from_excel(uploaded_file):
 
     # Country & CompanyCode
     cc = df["Client Codes Coding"].astype(str)
-    df["Country"] = (
-        cc
-        .str.strip()
-        .str[:2]
-        .str.upper()
-    )
+    df["Country"]     = cc.str.strip().str[:2].str.upper()
     df["CompanyCode"] = cc.str.strip().str[-4:]
 
     # Status & Unassigned
-    df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
-    df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
+    df["is_open"]        = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
+    df["Is_Unassigned"]  = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
 
-    # Region (always recalculated)
+    # Region
     df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
     return df
 
 def summarize(df):
     return (
-        df.groupby("TowerGroup").agg(
-            OPEN_TICKETS=("is_open", "sum"),
-            Today=("Today", "sum"),
-            Yesterday=("Yesterday", "sum"),
-            **{"2 Days": ("2 Days", "sum")},
-            **{"+3 Days": ("+3 Days", "sum")}
-        )
-        .reset_index()
+        df.groupby("TowerGroup")
+          .agg(
+              OPEN_TICKETS=("is_open", "sum"),
+              Today       =("Today", "sum"),
+              Yesterday   =("Yesterday", "sum"),
+              **{"2 Days":("2 Days", "sum")},
+              **{"+3 Days":("+3 Days", "sum")}
+          )
+          .reset_index()
     )
 
 def upload_to_firestore(df):
     df_clean = df.copy()
+
+    # Quitar columnas no serializables
     for col in df_clean.columns:
         if df_clean[col].apply(lambda x: isinstance(x, (dict, list, set))).any():
             df_clean.drop(col, axis=1, inplace=True)
             st.warning(f"⚠️ Dropped '{col}' (non-serializable)")
+
+    # Formatear datetimes
     for c in df_clean.select_dtypes(include=["datetime", "datetimetz"]):
         df_clean[c] = df_clean[c].dt.strftime("%Y-%m-%d %H:%M:%S")
+
     df_clean = df_clean.where(pd.notnull(df_clean), None)
-    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
+
+    # Calcular timestamp en hora de CDMX
+    now_cdmx = datetime.now(MEXICO_TZ)
+    payload = {
         "data": df_clean.to_dict(orient="records"),
-       now_cdmx = datetime.now(MEXICO_TZ)
-    "last_update": now_cdmx.strftime("%Y-%m-%d %H:%M:%S %Z")
-    })
+        "last_update": now_cdmx.strftime("%Y-%m-%d %H:%M:%S %Z")
+    }
+
+    db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set(payload)
 
 def download_from_firestore():
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
@@ -172,34 +179,34 @@ if df.empty:
     st.warning("No data loaded.")
     st.stop()
 
-# Dynamic flags recalculation & Region recalc
-df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
-df["Age"] = df["Created"].apply(safe_age)
-df["Today"] = df["Age"] == 0
-df["Yesterday"] = df["Age"] == 1
-df["2 Days"] = df["Age"] == 2
-df["+3 Days"] = df["Age"] >= 3
-df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
+# Recalculations with hora CDMX
+df["Created"]       = pd.to_datetime(df["Created"], errors="coerce")
+df["Age"]           = df["Created"].apply(safe_age)
+df["Today"]         = df["Age"] == 0
+df["Yesterday"]     = df["Age"] == 1
+df["2 Days"]        = df["Age"] == 2
+df["+3 Days"]       = df["Age"] >= 3
+df["is_open"]       = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
-df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
-# Always ensure Country & Region are normalized after reload
+df["Unassigned_Age"]= df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
+
 df["Country"] = (
     df["Country"]
-    .astype(str)
-    .str.strip()
-    .str.upper()
+      .astype(str)
+      .str.strip()
+      .str.upper()
 )
 df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
 # Sidebar Filters
 st.sidebar.header("Filters")
-regions = sorted(df["Region"].dropna().unique())
-sel_region = st.sidebar.multiselect("Region", regions, default=regions)
-df_reg = df[df["Region"].isin(sel_region)]
-countries = sorted(df_reg["Country"].dropna().unique())
+regions     = sorted(df["Region"].dropna().unique())
+sel_region  = st.sidebar.multiselect("Region", regions, default=regions)
+df_reg      = df[df["Region"].isin(sel_region)]
+countries   = sorted(df_reg["Country"].dropna().unique())
 sel_country = st.sidebar.multiselect("Country", countries, default=countries)
-df_country = df_reg[df_reg["Country"].isin(sel_country)]
-companies = sorted(df_country["CompanyCode"].dropna().unique())
+df_country  = df_reg[df_reg["Country"].isin(sel_country)]
+companies   = sorted(df_country["CompanyCode"].dropna().unique())
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
 df_filtered = df[
     df["Region"].isin(sel_region) &
@@ -208,21 +215,23 @@ df_filtered = df[
     df["TowerGroup"].isin(ALLOWED_TOWERS)
 ]
 
-# Summary by Tower & Graph Filters
-t_summary = summarize(df_filtered)
+# Summary & KPIs
+t_summary   = summarize(df_filtered)
 st.sidebar.header("Graph Filters")
-sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
-df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
+sel_towers  = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
+df_graph    = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
 
-# KPIs
 st.subheader("📊 KPIs")
-total_open = int(df_graph["is_open"].sum())
+total_open  = int(df_graph["is_open"].sum())
 total_plus3 = int(df_graph["+3 Days"].sum())
 pct_overdue = (total_plus3 / total_open * 100) if total_open else 0
 c1, c2, c3 = st.columns(3)
 c1.metric("🎫 Open Tickets", total_open)
 c2.metric("🕑 +3 Days", total_plus3)
 c3.metric("📈 % Overdue", f"{pct_overdue:.1f}%")
+
+# ... el resto de tu UI (tablas, gráficos, descargas, drilldowns, footer, etc.) permanece igual ...
+
 
 # Summary by Tower Table
 st.subheader("📋 Summary by Tower")
