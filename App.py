@@ -7,6 +7,13 @@ from firebase_admin import credentials, firestore
 import matplotlib.pyplot as plt
 import altair as alt
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# define la zona de CDMX
+MEXICO_TZ = ZoneInfo("America/Mexico_City")
+
+
 # ————————————————
 # Configuration & Secrets
 # ————————————————
@@ -117,7 +124,9 @@ def upload_to_firestore(df):
     df_clean = df_clean.where(pd.notnull(df_clean), None)
     db.collection(COLLECTION_NAME).document(DOCUMENT_ID).set({
         "data": df_clean.to_dict(orient="records"),
-        "last_update": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+       now_cdmx = datetime.now(MEXICO_TZ)
+"last_update": now_cdmx.strftime("%Y-%m-%d %H:%M:%S %Z")
+
     })
 
 def download_from_firestore():
