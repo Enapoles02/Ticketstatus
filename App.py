@@ -37,8 +37,8 @@ def safe_age(created_date):
 
 REGION_MAPPING = {
     "NAMER": ["US", "CA"],
-    "LATAM": ["MX", "AR", "PE"],
-    "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH", "GT", "PA"],
+    "LATAM": ["MX", "AR", "PE", "GT", "PA", "CL"],
+    "EUR": ["BE", "GB", "ES", "SE", "IT", "FR", "AT", "SK", "RO", "IE", "CH"]
     "AFRICA": ["AO", "ZA"],
     "ASIA / MIDDLE EAST": ["BH", "QA", "AE"]
 }
