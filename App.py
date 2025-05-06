@@ -18,7 +18,8 @@ ALLOWED_TOWERS = ["MDM", "P2P", "O2C", "R2R"]
 
 # Initialize Firebase only once
 if not firebase_admin._apps:
-    creds = st.secrets["firebase_credentials"]
+    creds_attr = st.secrets["firebase_credentials"]
+    creds = creds_attr.to_dict() if hasattr(creds_attr, "to_dict") else creds_attr
     cred = credentials.Certificate(creds)
     firebase_admin.initialize_app(cred)
 db = firestore.client()
@@ -51,40 +52,47 @@ def validate_columns(df, cols):
         return False
     return True
 
-
 def load_data_from_excel(uploaded_file):
     df = pd.read_excel(uploaded_file)
     df.columns = df.columns.str.strip().str.replace(r"[\r\n]+", "", regex=True)
-    if not validate_columns(df, ["Assignment group", "State", "Assigned to"]):
+    if not validate_columns(df, ["Assignment group", "State", "Assigned to", "Client Codes Coding"]):
         return pd.DataFrame()
+
     # Created & Age
     created_cols = [c for c in df.columns if "created" in c.lower()]
-    df["Created"] = pd.to_datetime(df[created_cols[0]] if created_cols else None, errors="coerce").dt.normalize()
+    df["Created"] = pd.to_datetime(
+        df[created_cols[0]] if created_cols else None,
+        errors="coerce"
+    ).dt.normalize()
     df["Age"] = df["Created"].apply(safe_age)
     df["Today"] = df["Age"] == 0
     df["Yesterday"] = df["Age"] == 1
     df["2 Days"] = df["Age"] == 2
     df["+3 Days"] = df["Age"] >= 3
+
     # TowerGroup
     df["TowerGroup"] = df["Assignment group"].str.split().str[1].str.upper()
     df = df.dropna(subset=["TowerGroup"])
+
     # Country & CompanyCode
-    if "Client Codes Coding" in df.columns:
-        cc = df["Client Codes Coding"].astype(str)
-        df["Country"] = cc.str[:2]
-        df["CompanyCode"] = cc.str[-4:]
-    else:
-        df["Country"] = None
-        df["CompanyCode"] = None
-        st.warning("⚠️ 'Client Codes Coding' missing.")
+    cc = df["Client Codes Coding"].astype(str)
+    df["Country"] = (
+        cc
+        .str.strip()
+        .str[:2]
+        .str.upper()
+    )
+    df["CompanyCode"] = cc.str.strip().str[-4:]
+
     # Status & Unassigned
     df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
     df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
     df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
-    # Region
-    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
-    return df
 
+    # Region (always recalculated)
+    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
+
+    return df
 
 def summarize(df):
     return (
@@ -93,11 +101,10 @@ def summarize(df):
             Today=("Today", "sum"),
             Yesterday=("Yesterday", "sum"),
             **{"2 Days": ("2 Days", "sum")},
-            **{"+3 Days": ("+3 Days", "sum")}    
+            **{"+3 Days": ("+3 Days", "sum")}
         )
         .reset_index()
     )
-
 
 def upload_to_firestore(df):
     df_clean = df.copy()
@@ -113,14 +120,12 @@ def upload_to_firestore(df):
         "last_update": dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     })
 
-
 def download_from_firestore():
     doc = db.collection(COLLECTION_NAME).document(DOCUMENT_ID).get()
     if doc.exists:
         c = doc.to_dict()
         return pd.DataFrame(c.get("data", [])), c.get("last_update")
     return pd.DataFrame(), None
-
 
 def to_excel(df):
     buf = io.BytesIO()
@@ -159,7 +164,7 @@ if df.empty:
     st.warning("No data loaded.")
     st.stop()
 
-# Dynamic flags recalculation
+# Dynamic flags recalculation & Region recalc
 df["Created"] = pd.to_datetime(df["Created"], errors="coerce")
 df["Age"] = df["Created"].apply(safe_age)
 df["Today"] = df["Age"] == 0
@@ -169,30 +174,25 @@ df["+3 Days"] = df["Age"] >= 3
 df["is_open"] = ~df["State"].str.contains("closed|resolved|cancel", case=False, na=False)
 df["Is_Unassigned"] = df["Assigned to"].isna() | (df["Assigned to"].str.strip() == "")
 df["Unassigned_Age"] = df.apply(lambda r: r["Age"] if r["Is_Unassigned"] else None, axis=1)
-# Ensure Region exists after reload
-if "Region" not in df.columns:
-    df["Region"] = df["Country"].map(region_lookup).fillna("Other")
+# Always ensure Country & Region are normalized after reload
+df["Country"] = (
+    df["Country"]
+    .astype(str)
+    .str.strip()
+    .str.upper()
+)
+df["Region"] = df["Country"].map(region_lookup).fillna("Other")
 
 # Sidebar Filters
 st.sidebar.header("Filters")
-
-# 1) Region filter
 regions = sorted(df["Region"].dropna().unique())
 sel_region = st.sidebar.multiselect("Region", regions, default=regions)
-
-# 2) Filter by selected regions
 df_reg = df[df["Region"].isin(sel_region)]
-
-# 3) Country based on region
 countries = sorted(df_reg["Country"].dropna().unique())
 sel_country = st.sidebar.multiselect("Country", countries, default=countries)
-
-# 4) Company Code based on selected countries
 df_country = df_reg[df_reg["Country"].isin(sel_country)]
 companies = sorted(df_country["CompanyCode"].dropna().unique())
 sel_company = st.sidebar.multiselect("Company Code", companies, default=companies)
-
-# 5) Apply filters
 df_filtered = df[
     df["Region"].isin(sel_region) &
     df["Country"].isin(sel_country) &
@@ -200,12 +200,11 @@ df_filtered = df[
     df["TowerGroup"].isin(ALLOWED_TOWERS)
 ]
 
-# Summary by Tower
+# Summary by Tower & Graph Filters
 t_summary = summarize(df_filtered)
 st.sidebar.header("Graph Filters")
 sel_towers = st.sidebar.multiselect("Select Towers", t_summary["TowerGroup"], default=t_summary["TowerGroup"])
 df_graph = df_filtered[df_filtered["TowerGroup"].isin(sel_towers)]
-t_summary = t_summary[t_summary["TowerGroup"].isin(t_summary["TowerGroup"])]
 
 # KPIs
 st.subheader("📊 KPIs")
@@ -221,9 +220,9 @@ c3.metric("📈 % Overdue", f"{pct_overdue:.1f}%")
 st.subheader("📋 Summary by Tower")
 st.dataframe(t_summary, use_container_width=True, hide_index=True)
 
-# Status Overview by SGBS & Local grouped by Tower
+# Status Overview by SGBS & Local
 sgbs_df = df_graph[df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False)]
-local_df = df_graph[~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False) & df_graph["Assignment group"].notna()]
+local_df = df_graph[~df_graph["Assignment group"].str.contains("SGBS|GBS|banking", case=False, na=False)]
 if not sgbs_df.empty:
     summary_sgbs = summarize(sgbs_df)
     st.subheader("📋 Status Overview by SGBS")
@@ -304,8 +303,6 @@ st.markdown(footer, unsafe_allow_html=True)
 
 # Interactive Region Chart
 st.subheader("🌍 Tickets by Region and Country (Interactive)")
-if "Region" not in df_graph.columns:
-    df_graph["Region"] = df_graph["Country"].map(region_lookup).fillna("Other")
 alt_data = df_graph.groupby(["Region", "Country"]).size().reset_index(name="Ticket Count")
 chart = alt.Chart(alt_data).mark_bar().encode(
     x=alt.X("Country:N", sort="-y"),
