@@ -189,25 +189,39 @@ with top_right:
     if st.button("🔄 Refresh"):
         st.rerun()
 
-with st.expander("🔐 Administrator Access", expanded=not st.session_state.admin):
-    if not st.session_state.admin:
-        pwd = st.text_input("Enter ADMIN Code", type="password")
-        if pwd and pwd == ADMIN_CODE:
-            st.session_state.admin = True
-            st.success("Admin mode enabled ✅")
-            st.rerun()
-    else:
+st.title("🧺 Drop24 • Admin Clientes & QR")
+st.caption("Carga tu Excel (el mismo que tú actualizas), genera Client ID + QR y sincroniza a Firebase.")
+
+# -----------------------
+# LOGIN ADMIN (con botón)
+# -----------------------
+st.subheader("🔐 Administrator Login")
+
+if not st.session_state.admin:
+    pwd = st.text_input("Enter ADMIN Code", type="password", key="admin_pwd")
+    colA, colB = st.columns([1, 3])
+    with colA:
+        if st.button("✅ Iniciar sesión", use_container_width=True):
+            if pwd == ADMIN_CODE:
+                st.session_state.admin = True
+                st.success("Admin mode enabled ✅")
+                st.rerun()
+            else:
+                st.error("Código incorrecto ❌")
+    with colB:
+        st.info("Tip: el código está en Streamlit Cloud → Settings → Secrets como `admin_code`.")
+else:
+    colA, colB, colC = st.columns([1, 1, 2])
+    with colA:
         st.success("Admin mode ON ✅")
+    with colB:
+        if st.button("🚪 Cerrar sesión", use_container_width=True):
+            st.session_state.admin = False
+            st.session_state.admin_pwd = ""
+            st.rerun()
+    with colC:
+        st.caption(f"Última actualización Firestore: {last_update or '—'}")
 
-# --- Mostrar DB actual desde Firestore ---
-df_db, last_update = download_clients_from_firestore()
-
-c1, c2, c3 = st.columns(3)
-c1.metric("👥 Clientes en DB", int(df_db.shape[0]) if not df_db.empty else 0)
-c2.metric("🕒 Última actualización", last_update or "—")
-c3.metric("☁️ Fuente", "Firestore")
-
-st.divider()
 
 # -----------------------
 # Cargar Excel y generar QRs
