@@ -10,7 +10,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 import qrcode
-from PIL import Image
+from PIL import Image  # noqa: F401  (lo dejamos por si luego quieres agregar logo al QR)
 
 # -----------------------
 # Configuración general
@@ -105,7 +105,7 @@ def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 def split_batches(rows: list[dict], batch_size: int = 500) -> list[list[dict]]:
-    return [rows[i:i+batch_size] for i in range(0, len(rows), batch_size)]
+    return [rows[i:i + batch_size] for i in range(0, len(rows), batch_size)]
 
 def firestore_delete_existing_batches():
     # Borra batch_* existentes (si hay)
@@ -131,9 +131,7 @@ def upload_clients_to_firestore(df: pd.DataFrame):
 
     # Guardar batches
     for i, b in enumerate(batches):
-        db.collection(COLLECTION_NAME).document(f"{BATCH_PREFIX}{i}").set({
-            "rows": b
-        })
+        db.collection(COLLECTION_NAME).document(f"{BATCH_PREFIX}{i}").set({"rows": b})
 
     # Guardar meta
     db.collection(COLLECTION_NAME).document(META_DOC_ID).set({
@@ -162,12 +160,10 @@ def download_clients_from_firestore() -> tuple[pd.DataFrame, str | None]:
     return df, last_update
 
 def guess_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    # intenta encontrar columna por coincidencia aproximada
     cols = {c.lower(): c for c in df.columns}
     for cand in candidates:
         if cand.lower() in cols:
             return cols[cand.lower()]
-    # match parcial
     for c in df.columns:
         cl = c.lower()
         for cand in candidates:
@@ -176,11 +172,31 @@ def guess_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 # -----------------------
-# UI
+# Session State
 # -----------------------
 if "admin" not in st.session_state:
     st.session_state.admin = False
 
+if "admin_pwd" not in st.session_state:
+    st.session_state.admin_pwd = ""
+
+if "df_work" not in st.session_state:
+    st.session_state.df_work = None  # DataFrame cargado/editado en sesión
+
+if "qr_zip_bytes" not in st.session_state:
+    st.session_state.qr_zip_bytes = None
+
+if "excel_bytes" not in st.session_state:
+    st.session_state.excel_bytes = None
+
+# -----------------------
+# Cargar DB actual (una vez por rerun)
+# -----------------------
+df_db, last_update = download_clients_from_firestore()
+
+# -----------------------
+# UI Header
+# -----------------------
 st.title("🧺 Drop24 • Admin Clientes & QR")
 st.caption("Carga tu Excel (el mismo que tú actualizas), genera Client ID + QR y sincroniza a Firebase.")
 
@@ -189,52 +205,78 @@ with top_right:
     if st.button("🔄 Refresh"):
         st.rerun()
 
-st.title("🧺 Drop24 • Admin Clientes & QR")
-st.caption("Carga tu Excel (el mismo que tú actualizas), genera Client ID + QR y sincroniza a Firebase.")
-
 # -----------------------
 # LOGIN ADMIN (con botón)
 # -----------------------
 st.subheader("🔐 Administrator Login")
 
 if not st.session_state.admin:
-    pwd = st.text_input("Enter ADMIN Code", type="password", key="admin_pwd")
-    colA, colB = st.columns([1, 3])
-    with colA:
+    st.session_state.admin_pwd = st.text_input("Enter ADMIN Code", type="password", key="admin_pwd_input")
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
         if st.button("✅ Iniciar sesión", use_container_width=True):
-            if pwd == ADMIN_CODE:
+            if (st.session_state.admin_pwd or "").strip() == (ADMIN_CODE or "").strip():
                 st.session_state.admin = True
                 st.success("Admin mode enabled ✅")
                 st.rerun()
             else:
                 st.error("Código incorrecto ❌")
-    with colB:
-        st.info("Tip: el código está en Streamlit Cloud → Settings → Secrets como `admin_code`.")
+
+    with col2:
+        if st.button("🧹 Limpiar", use_container_width=True):
+            st.session_state.admin_pwd = ""
+            st.session_state.admin_pwd_input = ""
+            st.rerun()
+
 else:
-    colA, colB, colC = st.columns([1, 1, 2])
-    with colA:
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
         st.success("Admin mode ON ✅")
-    with colB:
+    with col2:
         if st.button("🚪 Cerrar sesión", use_container_width=True):
             st.session_state.admin = False
             st.session_state.admin_pwd = ""
+            st.session_state.admin_pwd_input = ""
+            st.session_state.df_work = None
+            st.session_state.qr_zip_bytes = None
+            st.session_state.excel_bytes = None
             st.rerun()
-    with colC:
+    with col3:
         st.caption(f"Última actualización Firestore: {last_update or '—'}")
 
+st.divider()
+
+# KPIs Firestore
+c1, c2, c3 = st.columns(3)
+c1.metric("👥 Clientes en DB", int(df_db.shape[0]) if not df_db.empty else 0)
+c2.metric("🕒 Última actualización", last_update or "—")
+c3.metric("☁️ Fuente", "Firestore")
+
+st.divider()
 
 # -----------------------
-# Cargar Excel y generar QRs
+# Bloque NO-ADMIN
 # -----------------------
 if not st.session_state.admin:
     st.info("Entra como ADMIN para cargar Excel y actualizar la base.")
     if not df_db.empty:
         st.subheader("Vista de la base actual (Firestore)")
         st.dataframe(df_db, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Descargar Excel (Firestore)",
+            data=df_to_excel_bytes(df_db),
+            file_name="Drop24_Clientes_Firestore.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    else:
+        st.warning("Aún no hay datos guardados en Firestore para Drop24.")
     st.stop()
 
+# -----------------------
+# ADMIN: Cargar Excel y generar QRs
+# -----------------------
 st.subheader("1) Cargar tu Excel (base de datos)")
-
 uploaded = st.file_uploader("Sube tu Excel de clientes", type=["xlsx", "xls"])
 prefix = st.text_input("Prefijo del QR Payload", value="DROP24")
 force_regen = st.checkbox("Regenerar Client ID / QR aunque ya existan", value=False)
@@ -243,104 +285,120 @@ if uploaded:
     df = pd.read_excel(uploaded, engine="openpyxl")
     df = clean_cols(df)
     df = ensure_columns(df)
+    st.session_state.df_work = df
 
-    # Intento de detección automática de columnas "base"
-    col_nombre   = guess_column(df, ["Nombre", "Name", "First Name", "firstname", "nombre"])
-    col_apellido = guess_column(df, ["Apellido", "Last Name", "lastname", "apellidos", "apellido"])
-    col_tel      = guess_column(df, ["Telefono", "Teléfono", "Phone", "Celular", "WhatsApp", "Movil", "Móvil"])
-    col_email    = guess_column(df, ["Email", "Correo", "Mail", "E-mail"])
+# Si ya hay df en sesión, trabajamos con esa
+df_work = st.session_state.df_work
 
-    st.markdown("### 2) Mapear columnas (solo si aplica)")
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        col_nombre = st.selectbox("Columna Nombre", df.columns, index=(list(df.columns).index(col_nombre) if col_nombre in df.columns else 0))
-    with m2:
-        col_apellido = st.selectbox("Columna Apellido", df.columns, index=(list(df.columns).index(col_apellido) if col_apellido in df.columns else 0))
-    with m3:
-        col_tel = st.selectbox("Columna Teléfono", df.columns, index=(list(df.columns).index(col_tel) if col_tel in df.columns else 0))
-    with m4:
-        col_email = st.selectbox("Columna Email (opcional)", ["(no usar)"] + list(df.columns), index=(1 + list(df.columns).index(col_email) if col_email in df.columns else 0))
+if df_work is None:
+    st.info("Sube tu Excel para generar/actualizar IDs y QRs.")
+    st.stop()
 
-    # Generación
-    st.subheader("3) Generar / completar Client ID + QR")
-    run = st.button("⚙️ Generar IDs + QRs")
+# Intento de detección automática de columnas "base"
+col_nombre   = guess_column(df_work, ["Nombre", "Name", "First Name", "firstname", "nombre"])
+col_apellido = guess_column(df_work, ["Apellido", "Last Name", "lastname", "apellidos", "apellido"])
+col_tel      = guess_column(df_work, ["Telefono", "Teléfono", "Phone", "Celular", "WhatsApp", "Movil", "Móvil"])
+col_email    = guess_column(df_work, ["Email", "Correo", "Mail", "E-mail"])
 
-    if run:
-        updated_at = now_cdmx_str()
-        created = 0
-        regenerated = 0
+st.markdown("### 2) Mapear columnas (solo si aplica)")
+m1, m2, m3, m4 = st.columns(4)
+with m1:
+    col_nombre = st.selectbox("Columna Nombre", df_work.columns, index=(list(df_work.columns).index(col_nombre) if col_nombre in df_work.columns else 0))
+with m2:
+    col_apellido = st.selectbox("Columna Apellido", df_work.columns, index=(list(df_work.columns).index(col_apellido) if col_apellido in df_work.columns else 0))
+with m3:
+    col_tel = st.selectbox("Columna Teléfono", df_work.columns, index=(list(df_work.columns).index(col_tel) if col_tel in df_work.columns else 0))
+with m4:
+    col_email = st.selectbox("Columna Email (opcional)", ["(no usar)"] + list(df_work.columns), index=(1 + list(df_work.columns).index(col_email) if col_email in df_work.columns else 0))
 
+st.subheader("3) Generar / completar Client ID + QR")
+if st.button("⚙️ Generar IDs + QRs", use_container_width=True):
+    df = df_work.copy()
+    updated_at = now_cdmx_str()
+    created = 0
+    regenerated = 0
+
+    for i in range(len(df)):
+        has_id = bool(safe_str(df.at[i, "Client ID"]))
+        has_token = bool(safe_str(df.at[i, "QR Token"]))
+        has_payload = bool(safe_str(df.at[i, "QR Payload"]))
+
+        if force_regen or (not has_id) or (not has_token) or (not has_payload):
+            nombre = safe_str(df.at[i, col_nombre])
+            apellido = safe_str(df.at[i, col_apellido])
+            telefono = safe_str(df.at[i, col_tel])
+
+            client_id = safe_str(df.at[i, "Client ID"])
+            if force_regen or not client_id:
+                client_id = build_client_id(nombre, apellido, telefono, i + 1)
+
+            token = build_token(client_id)
+            payload = make_payload(prefix, client_id, token)
+
+            df.at[i, "Client ID"] = client_id
+            df.at[i, "QR Token"] = token
+            df.at[i, "QR Payload"] = payload
+            df.at[i, "Updated At"] = updated_at
+
+            if has_id or has_token or has_payload:
+                regenerated += 1
+            else:
+                created += 1
+
+    st.session_state.df_work = df
+    st.success(f"Listo ✅ Nuevos: {created} | Actualizados/Regenerados: {regenerated}")
+
+    # Preparar descargas (persisten en sesión)
+    st.session_state.excel_bytes = df_to_excel_bytes(df)
+
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for i in range(len(df)):
-            has_id = bool(safe_str(df.at[i, "Client ID"]))
-            has_token = bool(safe_str(df.at[i, "QR Token"]))
-            has_payload = bool(safe_str(df.at[i, "QR Payload"]))
+            cid = safe_str(df.at[i, "Client ID"]) or f"CLIENT_{i+1}"
+            payload = safe_str(df.at[i, "QR Payload"])
+            if payload:
+                png = make_qr_png_bytes(payload)
+                z.writestr(f"QR_{cid}.png", png)
+    st.session_state.qr_zip_bytes = zip_buf.getvalue()
 
-            if force_regen or (not has_id) or (not has_token) or (not has_payload):
-                nombre = safe_str(df.at[i, col_nombre])
-                apellido = safe_str(df.at[i, col_apellido])
-                telefono = safe_str(df.at[i, col_tel])
+st.subheader("4) Descargas")
+colA, colB = st.columns(2)
 
-                client_id = safe_str(df.at[i, "Client ID"])
-                if force_regen or not client_id:
-                    client_id = build_client_id(nombre, apellido, telefono, i + 1)
-
-                token = build_token(client_id)
-                payload = make_payload(prefix, client_id, token)
-
-                df.at[i, "Client ID"] = client_id
-                df.at[i, "QR Token"] = token
-                df.at[i, "QR Payload"] = payload
-                df.at[i, "Updated At"] = updated_at
-
-                if has_id or has_token or has_payload:
-                    regenerated += 1
-                else:
-                    created += 1
-
-        st.success(f"Listo ✅ Nuevos: {created} | Actualizados/Regenerados: {regenerated}")
-
-        # Crear ZIP de QRs
-        st.subheader("4) Descargas")
-        # Excel actualizado
-        excel_bytes = df_to_excel_bytes(df)
+with colA:
+    if st.session_state.excel_bytes:
         st.download_button(
             "⬇️ Descargar Excel actualizado",
-            data=excel_bytes,
+            data=st.session_state.excel_bytes,
             file_name="Drop24_Clientes_Actualizado.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
         )
+    else:
+        st.info("Primero genera IDs/QRs para habilitar descarga del Excel.")
 
-        # ZIP QRs
-        zip_buf = io.BytesIO()
-        with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            for i in range(len(df)):
-                cid = safe_str(df.at[i, "Client ID"]) or f"CLIENT_{i+1}"
-                payload = safe_str(df.at[i, "QR Payload"])
-                if payload:
-                    png = make_qr_png_bytes(payload)
-                    z.writestr(f"QR_{cid}.png", png)
-
+with colB:
+    if st.session_state.qr_zip_bytes:
         st.download_button(
             "⬇️ Descargar ZIP de QRs (PNG)",
-            data=zip_buf.getvalue(),
+            data=st.session_state.qr_zip_bytes,
             file_name="Drop24_QRs.zip",
-            mime="application/zip"
+            mime="application/zip",
+            use_container_width=True
         )
+    else:
+        st.info("Primero genera IDs/QRs para habilitar descarga del ZIP de QRs.")
 
-        st.divider()
+st.subheader("5) Sincronizar a Firebase (Firestore)")
+if st.button("☁️ Subir base a Firestore", use_container_width=True):
+    if st.session_state.df_work is None:
+        st.error("No hay un Excel cargado en sesión.")
+    else:
+        upload_clients_to_firestore(st.session_state.df_work)
+        st.success("Base subida a Firestore ✅")
+        st.rerun()
 
-        # Sync a Firestore
-        st.subheader("5) Sincronizar a Firebase (Firestore)")
-        if st.button("☁️ Subir base a Firestore"):
-            upload_clients_to_firestore(df)
-            st.success("Base subida a Firestore ✅")
-            st.rerun()
-
-        st.subheader("Vista previa")
-        st.dataframe(df, use_container_width=True, hide_index=True)
-
-else:
-    st.info("Sube tu Excel para generar/actualizar IDs y QRs.")
+st.subheader("Vista previa (Excel en sesión)")
+st.dataframe(st.session_state.df_work, use_container_width=True, hide_index=True)
 
 st.divider()
 
