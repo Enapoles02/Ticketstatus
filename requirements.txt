@@ -1,7 +1,5 @@
-streamlit
-pandas
-openpyxl
-firebase-admin
-matplotlib
-altair
-plotly
+streamlit==1.41.1
+pandas==2.2.3
+openpyxl==3.1.5
+qrcode==8.0
+pillow==11.0.0
