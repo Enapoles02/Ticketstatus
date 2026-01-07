@@ -290,18 +290,9 @@ PRICES = {
 
 
 # ---------------------------
-# CHATBOT HELPERS (NUEVO)
+# CHATBOT HELPERS
 # ---------------------------
 def drop24_help_answer(user_text: str) -> str:
-    
-    def send_to_drop24_bot(text: str):
-    if not text:
-        return
-    st.session_state.drop24_chat.append({"role": "user", "content": text})
-    reply = drop24_help_answer(text)
-    st.session_state.drop24_chat.append({"role": "assistant", "content": reply})
-    st.rerun()
-
     t = (user_text or "").lower().strip()
     p = PRICES
 
@@ -372,6 +363,20 @@ def drop24_help_answer(user_text: str) -> str:
         "4) **Tiempos de entrega**\n"
         "5) **Especiales (edredones/cobijas)**\n"
     )
+
+
+def send_to_drop24_bot(text: str):
+    if not text:
+        return
+    if "drop24_chat" not in st.session_state:
+        st.session_state.drop24_chat = [
+            {"role": "assistant", "content": "¡Hola! Soy el asistente de Drop24 🧺 ¿Qué duda tienes hoy?"}
+        ]
+    st.session_state.drop24_chat.append({"role": "user", "content": text})
+    reply = drop24_help_answer(text)
+    st.session_state.drop24_chat.append({"role": "assistant", "content": reply})
+    st.rerun()
+
 
 # =================================================
 # SESSION
