@@ -2,31 +2,29 @@ import streamlit as st
 import pandas as pd
 import io
 import re
-import zipfile
+import uuid
+import hashlib
+import bcrypt
+import qrcode
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-import qrcode
-from PIL import Image  # noqa: F401  (lo dejamos por si luego quieres agregar logo al QR)
-
 # -----------------------
 # Configuración general
 # -----------------------
-st.set_page_config(page_title="Drop24 • Admin Clientes & QR", page_icon="🧺", layout="wide")
-
-ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
-
-# Firestore (usa tu conexión)
-COLLECTION_NAME = "drop24_clients"
-META_DOC_ID = "meta"             # guarda metadatos (last_update, total_rows, etc.)
-BATCH_PREFIX = "batch_"          # batch_0, batch_1, ...
+st.set_page_config(page_title="Drop24 • Usuarios & QR", page_icon="🧺", layout="wide")
 
 MEXICO_TZ = ZoneInfo("America/Mexico_City")
+ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
 
-# Initialize Firebase only once (MISMA LÓGICA QUE TU CÓDIGO)
+# Firestore Collections
+USERS_COL = "drop24_users"          # usuarios registrados
+TOKENS_COL = "drop24_qr_tokens"     # QRs agendados
+
+# Initialize Firebase only once (MISMA LÓGICA)
 if not firebase_admin._apps:
     creds_attr = st.secrets["firebase_credentials"]
     creds = creds_attr.to_dict() if hasattr(creds_attr, "to_dict") else creds_attr
@@ -38,51 +36,32 @@ db = firestore.client()
 # -----------------------
 # Helpers
 # -----------------------
+def now_cdmx():
+    return datetime.now(MEXICO_TZ)
+
 def now_cdmx_str():
-    return datetime.now(MEXICO_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
-
-def clean_cols(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.replace(r"[\r\n]+", "", regex=True)
-    )
-    return df
-
-def safe_str(x):
-    if pd.isna(x):
-        return ""
-    return str(x).strip()
+    return now_cdmx().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 def normalize_phone(x: str) -> str:
-    digits = re.sub(r"\D+", "", safe_str(x))
+    digits = re.sub(r"\D+", "", (x or "").strip())
     return digits
 
-def ensure_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Columnas que generamos si faltan
-    for c in ["Client ID", "QR Token", "QR Payload", "Updated At"]:
-        if c not in df.columns:
-            df[c] = ""
-    return df
+def sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-def build_client_id(nombre: str, apellido: str, telefono: str, row_index: int) -> str:
-    n = safe_str(nombre).upper()
-    a = safe_str(apellido).upper()
-    p = normalize_phone(telefono)
+def hash_password(pw: str) -> str:
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(pw.encode("utf-8"), salt).decode("utf-8")
 
-    ini = (n[:1] if n else "X") + (a[:1] if a else "X")
-    last4 = p[-4:] if len(p) >= 4 else str(row_index).zfill(4)
-    return f"C{ini}{last4}{str(row_index).zfill(4)}"
+def check_password(pw: str, pw_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("utf-8"))
+    except:
+        return False
 
-def build_token(client_id: str) -> str:
-    ts = datetime.now(MEXICO_TZ).strftime("%Y%m%d%H%M%S")
-    return f"T{client_id}-{ts}"
-
-def make_payload(prefix: str, client_id: str, token: str) -> str:
-    # Payload simple, robusto y fácil de parsear en Android
-    # Ej: DROP24|CNA12340001|TCNA12340001-20260106153000
-    return f"{prefix}|{client_id}|{token}"
+def make_token_id() -> str:
+    # corto y robusto para QR
+    return uuid.uuid4().hex[:12].upper()
 
 def make_qr_png_bytes(payload: str) -> bytes:
     qr = qrcode.QRCode(
@@ -98,323 +77,285 @@ def make_qr_png_bytes(payload: str) -> bytes:
     img.save(bio, format="PNG")
     return bio.getvalue()
 
-def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        df.to_excel(w, index=False, sheet_name="Clientes")
-    return buf.getvalue()
+def user_doc(username: str):
+    return db.collection(USERS_COL).document(username)
 
-def split_batches(rows: list[dict], batch_size: int = 500) -> list[list[dict]]:
-    return [rows[i:i + batch_size] for i in range(0, len(rows), batch_size)]
+def token_doc(token_id: str):
+    return db.collection(TOKENS_COL).document(token_id)
 
-def firestore_delete_existing_batches():
-    # Borra batch_* existentes (si hay)
-    docs = db.collection(COLLECTION_NAME).stream()
-    for d in docs:
-        if d.id.startswith(BATCH_PREFIX) or d.id == META_DOC_ID:
-            db.collection(COLLECTION_NAME).document(d.id).delete()
+def parse_dt(date_obj, time_obj) -> datetime:
+    # date_input devuelve date, time_input devuelve time
+    dt_naive = datetime.combine(date_obj, time_obj)
+    # convertir a tz CDMX (naive -> aware)
+    return dt_naive.replace(tzinfo=MEXICO_TZ)
 
-def upload_clients_to_firestore(df: pd.DataFrame):
-    # Limpiar NaNs
-    df_clean = df.copy()
-    df_clean = df_clean.where(pd.notnull(df_clean), None)
-
-    # Convertir datetimes a string (por si acaso)
-    for c in df_clean.columns:
-        if pd.api.types.is_datetime64_any_dtype(df_clean[c]):
-            df_clean[c] = pd.to_datetime(df_clean[c], errors="coerce").dt.strftime("%Y-%m-%d %H:%M:%S")
-
-    rows = df_clean.to_dict(orient="records")
-    batches = split_batches(rows, batch_size=500)
-
-    firestore_delete_existing_batches()
-
-    # Guardar batches
-    for i, b in enumerate(batches):
-        db.collection(COLLECTION_NAME).document(f"{BATCH_PREFIX}{i}").set({"rows": b})
-
-    # Guardar meta
-    db.collection(COLLECTION_NAME).document(META_DOC_ID).set({
-        "last_update": now_cdmx_str(),
-        "total_rows": len(rows),
-        "batch_count": len(batches),
-        "schema": list(df_clean.columns)
-    })
-
-def download_clients_from_firestore() -> tuple[pd.DataFrame, str | None]:
-    meta = db.collection(COLLECTION_NAME).document(META_DOC_ID).get()
-    if not meta.exists:
-        return pd.DataFrame(), None
-
-    meta_dict = meta.to_dict()
-    batch_count = int(meta_dict.get("batch_count", 0))
-    last_update = meta_dict.get("last_update")
-
-    all_rows = []
-    for i in range(batch_count):
-        doc = db.collection(COLLECTION_NAME).document(f"{BATCH_PREFIX}{i}").get()
-        if doc.exists:
-            all_rows.extend(doc.to_dict().get("rows", []))
-
-    df = pd.DataFrame(all_rows)
-    return df, last_update
-
-def guess_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
-    cols = {c.lower(): c for c in df.columns}
-    for cand in candidates:
-        if cand.lower() in cols:
-            return cols[cand.lower()]
-    for c in df.columns:
-        cl = c.lower()
-        for cand in candidates:
-            if cand.lower() in cl:
-                return c
-    return None
+def require_fields(d: dict, fields: list[str]) -> list[str]:
+    missing = []
+    for f in fields:
+        v = d.get(f)
+        if v is None or str(v).strip() == "":
+            missing.append(f)
+    return missing
 
 # -----------------------
-# Session State
+# Session
 # -----------------------
-if "admin" not in st.session_state:
-    st.session_state.admin = False
-
-if "admin_pwd" not in st.session_state:
-    st.session_state.admin_pwd = ""
-
-if "df_work" not in st.session_state:
-    st.session_state.df_work = None  # DataFrame cargado/editado en sesión
-
-if "qr_zip_bytes" not in st.session_state:
-    st.session_state.qr_zip_bytes = None
-
-if "excel_bytes" not in st.session_state:
-    st.session_state.excel_bytes = None
+if "auth" not in st.session_state:
+    st.session_state.auth = False
+if "username" not in st.session_state:
+    st.session_state.username = None
 
 # -----------------------
-# Cargar DB actual (una vez por rerun)
+# UI
 # -----------------------
-df_db, last_update = download_clients_from_firestore()
+st.title("🧺 Drop24 • Registro, Login & QR Agendado")
+st.caption("Registro abierto para usuarios. Genera QRs con ventana de tiempo y valida en app Android.")
+
+tab_login, tab_register, tab_qr = st.tabs(["🔐 Login", "📝 Registro", "📲 Generar QR (agendado)"])
 
 # -----------------------
-# UI Header
+# LOGIN
 # -----------------------
-st.title("🧺 Drop24 • Admin Clientes & QR")
-st.caption("Carga tu Excel (el mismo que tú actualizas), genera Client ID + QR y sincroniza a Firebase.")
-
-top_left, top_right = st.columns([2, 1])
-with top_right:
-    if st.button("🔄 Refresh"):
-        st.rerun()
-
-# -----------------------
-# LOGIN ADMIN (con botón)
-# -----------------------
-st.subheader("🔐 Administrator Login")
-
-if not st.session_state.admin:
-    st.session_state.admin_pwd = st.text_input("Enter ADMIN Code", type="password", key="admin_pwd_input")
-
+with tab_login:
+    st.subheader("🔐 Login")
     col1, col2 = st.columns([1, 1])
+
     with col1:
-        if st.button("✅ Iniciar sesión", use_container_width=True):
-            if (st.session_state.admin_pwd or "").strip() == (ADMIN_CODE or "").strip():
-                st.session_state.admin = True
-                st.success("Admin mode enabled ✅")
-                st.rerun()
+        username = st.text_input("Usuario", placeholder="ej: enapoles")
+        password = st.text_input("Contraseña", type="password")
+
+        if st.button("Ingresar"):
+            u = (username or "").strip().lower()
+            if not u or not password:
+                st.error("Completa usuario y contraseña.")
             else:
-                st.error("Código incorrecto ❌")
+                doc = user_doc(u).get()
+                if not doc.exists:
+                    st.error("Usuario no existe.")
+                else:
+                    data = doc.to_dict()
+                    if not data.get("active", True):
+                        st.error("Usuario desactivado. Contacta a ADMIN.")
+                    elif not check_password(password, data.get("password_hash", "")):
+                        st.error("Contraseña incorrecta.")
+                    else:
+                        st.session_state.auth = True
+                        st.session_state.username = u
+                        st.success(f"Bienvenido: {u} ✅")
+                        st.rerun()
 
     with col2:
-        if st.button("🧹 Limpiar", use_container_width=True):
-            st.session_state.admin_pwd = ""
-            st.session_state.admin_pwd_input = ""
-            st.rerun()
-
-else:
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        st.success("Admin mode ON ✅")
-    with col2:
-        if st.button("🚪 Cerrar sesión", use_container_width=True):
-            st.session_state.admin = False
-            st.session_state.admin_pwd = ""
-            st.session_state.admin_pwd_input = ""
-            st.session_state.df_work = None
-            st.session_state.qr_zip_bytes = None
-            st.session_state.excel_bytes = None
-            st.rerun()
-    with col3:
-        st.caption(f"Última actualización Firestore: {last_update or '—'}")
-
-st.divider()
-
-# KPIs Firestore
-c1, c2, c3 = st.columns(3)
-c1.metric("👥 Clientes en DB", int(df_db.shape[0]) if not df_db.empty else 0)
-c2.metric("🕒 Última actualización", last_update or "—")
-c3.metric("☁️ Fuente", "Firestore")
-
-st.divider()
-
-# -----------------------
-# Bloque NO-ADMIN
-# -----------------------
-if not st.session_state.admin:
-    st.info("Entra como ADMIN para cargar Excel y actualizar la base.")
-    if not df_db.empty:
-        st.subheader("Vista de la base actual (Firestore)")
-        st.dataframe(df_db, use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Descargar Excel (Firestore)",
-            data=df_to_excel_bytes(df_db),
-            file_name="Drop24_Clientes_Firestore.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        st.info(
+            "Tip: si quieres que solo ADMIN pueda aprobar usuarios, "
+            "puedo agregarte un flujo de estatus (PENDING → ACTIVE)."
         )
-    else:
-        st.warning("Aún no hay datos guardados en Firestore para Drop24.")
-    st.stop()
+
+    st.divider()
+    if st.session_state.auth:
+        st.success(f"Sesión activa: {st.session_state.username}")
+        if st.button("Cerrar sesión"):
+            st.session_state.auth = False
+            st.session_state.username = None
+            st.rerun()
 
 # -----------------------
-# ADMIN: Cargar Excel y generar QRs
+# REGISTRO
 # -----------------------
-st.subheader("1) Cargar tu Excel (base de datos)")
-uploaded = st.file_uploader("Sube tu Excel de clientes", type=["xlsx", "xls"])
-prefix = st.text_input("Prefijo del QR Payload", value="DROP24")
-force_regen = st.checkbox("Regenerar Client ID / QR aunque ya existan", value=False)
+with tab_register:
+    st.subheader("📝 Registro de usuario (campos obligatorios)")
 
-if uploaded:
-    df = pd.read_excel(uploaded, engine="openpyxl")
-    df = clean_cols(df)
-    df = ensure_columns(df)
-    st.session_state.df_work = df
+    with st.form("register_form", clear_on_submit=False):
+        username_r = st.text_input("Usuario (único)", placeholder="ej: drop24_user1").strip().lower()
+        pw1 = st.text_input("Contraseña", type="password")
+        pw2 = st.text_input("Confirmar contraseña", type="password")
 
-# Si ya hay df en sesión, trabajamos con esa
-df_work = st.session_state.df_work
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            full_name = st.text_input("Nombre completo *")
+        with c2:
+            phone = st.text_input("Teléfono (WhatsApp) *")
+        with c3:
+            email = st.text_input("Email *")
 
-if df_work is None:
-    st.info("Sube tu Excel para generar/actualizar IDs y QRs.")
-    st.stop()
+        st.markdown("### Seguridad / Identidad (sin guardar INE completa)")
+        c4, c5, c6 = st.columns(3)
+        with c4:
+            ine_last4 = st.text_input("INE (últimos 4 dígitos) *", max_chars=4)
+        with c5:
+            ine_hash_input = st.text_input("INE (número completo) (opcional, NO recomendado)", type="password")
+        with c6:
+            ine_verified = st.checkbox("INE verificada (checkbox) *", value=False)
 
-# Intento de detección automática de columnas "base"
-col_nombre   = guess_column(df_work, ["Nombre", "Name", "First Name", "firstname", "nombre"])
-col_apellido = guess_column(df_work, ["Apellido", "Last Name", "lastname", "apellidos", "apellido"])
-col_tel      = guess_column(df_work, ["Telefono", "Teléfono", "Phone", "Celular", "WhatsApp", "Movil", "Móvil"])
-col_email    = guess_column(df_work, ["Email", "Correo", "Mail", "E-mail"])
+        st.markdown("### Ubicación")
+        c7, c8 = st.columns(2)
+        with c7:
+            neighborhood = st.text_input("Colonia/Alcaldía *", placeholder="Coapa / Coyoacán / etc.")
+        with c8:
+            address_ref = st.text_input("Referencia (opcional)", placeholder="cerca de…")
 
-st.markdown("### 2) Mapear columnas (solo si aplica)")
-m1, m2, m3, m4 = st.columns(4)
-with m1:
-    col_nombre = st.selectbox("Columna Nombre", df_work.columns, index=(list(df_work.columns).index(col_nombre) if col_nombre in df_work.columns else 0))
-with m2:
-    col_apellido = st.selectbox("Columna Apellido", df_work.columns, index=(list(df_work.columns).index(col_apellido) if col_apellido in df_work.columns else 0))
-with m3:
-    col_tel = st.selectbox("Columna Teléfono", df_work.columns, index=(list(df_work.columns).index(col_tel) if col_tel in df_work.columns else 0))
-with m4:
-    col_email = st.selectbox("Columna Email (opcional)", ["(no usar)"] + list(df_work.columns), index=(1 + list(df_work.columns).index(col_email) if col_email in df_work.columns else 0))
+        consent_gps = st.checkbox("Consentimiento para guardar GPS (opcional)", value=False)
+        gps_lat = st.text_input("Latitud (opcional)", disabled=not consent_gps)
+        gps_lon = st.text_input("Longitud (opcional)", disabled=not consent_gps)
 
-st.subheader("3) Generar / completar Client ID + QR")
-if st.button("⚙️ Generar IDs + QRs", use_container_width=True):
-    df = df_work.copy()
-    updated_at = now_cdmx_str()
-    created = 0
-    regenerated = 0
+        submitted = st.form_submit_button("Crear cuenta")
 
-    for i in range(len(df)):
-        has_id = bool(safe_str(df.at[i, "Client ID"]))
-        has_token = bool(safe_str(df.at[i, "QR Token"]))
-        has_payload = bool(safe_str(df.at[i, "QR Payload"]))
+    if submitted:
+        # Validaciones
+        payload = {
+            "username": username_r,
+            "full_name": full_name.strip(),
+            "phone": normalize_phone(phone),
+            "email": email.strip().lower(),
+            "ine_last4": (ine_last4 or "").strip(),
+            "ine_verified": bool(ine_verified),
+            "neighborhood": neighborhood.strip(),
+            "address_ref": address_ref.strip(),
+        }
 
-        if force_regen or (not has_id) or (not has_token) or (not has_payload):
-            nombre = safe_str(df.at[i, col_nombre])
-            apellido = safe_str(df.at[i, col_apellido])
-            telefono = safe_str(df.at[i, col_tel])
+        required = ["username", "full_name", "phone", "email", "ine_last4", "neighborhood"]
+        missing = require_fields(payload, required)
+        if missing:
+            st.error(f"Faltan campos obligatorios: {', '.join(missing)}")
+        elif len(payload["ine_last4"]) != 4 or not payload["ine_last4"].isdigit():
+            st.error("INE últimos 4 debe ser numérico de 4 dígitos.")
+        elif not payload["phone"]:
+            st.error("Teléfono inválido.")
+        elif pw1 != pw2:
+            st.error("Las contraseñas no coinciden.")
+        elif len(pw1) < 6:
+            st.error("Contraseña muy corta (mínimo 6).")
+        elif not ine_verified:
+            st.error("Debes marcar INE verificada (si quieres, luego lo cambiamos a flujo de aprobación).")
+        else:
+            # Hash de INE (si el usuario insiste en capturarla)
+            # Recomendación: NO usar esto. Si lo usan, solo guardamos HASH.
+            ine_hash = None
+            if ine_hash_input and ine_hash_input.strip():
+                ine_hash = sha256_hex(ine_hash_input.strip())
 
-            client_id = safe_str(df.at[i, "Client ID"])
-            if force_regen or not client_id:
-                client_id = build_client_id(nombre, apellido, telefono, i + 1)
+            # GPS opcional
+            gps = None
+            if consent_gps and gps_lat.strip() and gps_lon.strip():
+                gps = {"lat": gps_lat.strip(), "lon": gps_lon.strip()}
 
-            token = build_token(client_id)
-            payload = make_payload(prefix, client_id, token)
-
-            df.at[i, "Client ID"] = client_id
-            df.at[i, "QR Token"] = token
-            df.at[i, "QR Payload"] = payload
-            df.at[i, "Updated At"] = updated_at
-
-            if has_id or has_token or has_payload:
-                regenerated += 1
+            doc_ref = user_doc(username_r)
+            if doc_ref.get().exists:
+                st.error("Ese usuario ya existe. Elige otro.")
             else:
-                created += 1
+                doc_ref.set({
+                    "username": username_r,
+                    "password_hash": hash_password(pw1),
+                    "full_name": payload["full_name"],
+                    "phone": payload["phone"],
+                    "email": payload["email"],
+                    "ine_last4": payload["ine_last4"],
+                    "ine_hash": ine_hash,            # solo hash, nunca el número en claro
+                    "ine_verified": payload["ine_verified"],
+                    "neighborhood": payload["neighborhood"],
+                    "address_ref": payload["address_ref"],
+                    "gps": gps,
+                    "active": True,
+                    "role": "USER",
+                    "created_at": now_cdmx_str(),
+                })
+                st.success("Cuenta creada ✅ Ya puedes ir a Login e ingresar.")
 
-    st.session_state.df_work = df
-    st.success(f"Listo ✅ Nuevos: {created} | Actualizados/Regenerados: {regenerated}")
+# -----------------------
+# GENERAR QR (agendado)
+# -----------------------
+with tab_qr:
+    st.subheader("📲 Generar QR (agendado)")
 
-    # Preparar descargas (persisten en sesión)
-    st.session_state.excel_bytes = df_to_excel_bytes(df)
+    if not st.session_state.auth:
+        st.info("Primero inicia sesión para generar QRs.")
+        st.stop()
 
-    zip_buf = io.BytesIO()
-    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for i in range(len(df)):
-            cid = safe_str(df.at[i, "Client ID"]) or f"CLIENT_{i+1}"
-            payload = safe_str(df.at[i, "QR Payload"])
-            if payload:
+    st.success(f"Sesión: {st.session_state.username}")
+
+    # Inputs del QR
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        client_id = st.text_input("Client ID (de tu base)", placeholder="CNA1234....")
+    with c2:
+        access_type = st.selectbox("Qué abre este QR", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
+    with c3:
+        one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
+
+    st.markdown("### Ventana de tiempo (CDMX)")
+    d1, t1, d2, t2 = st.columns([1,1,1,1])
+    with d1:
+        start_date = st.date_input("Inicio (fecha)", value=now_cdmx().date())
+    with t1:
+        start_time = st.time_input("Inicio (hora)", value=now_cdmx().time().replace(second=0, microsecond=0))
+    with d2:
+        end_date = st.date_input("Fin (fecha)", value=now_cdmx().date())
+    with t2:
+        end_time = st.time_input("Fin (hora)", value=(now_cdmx().time().replace(second=0, microsecond=0)))
+
+    prefix = st.text_input("Prefijo QR", value="DROP24")
+
+    if st.button("✅ Crear QR"):
+        if not client_id.strip():
+            st.error("Client ID es obligatorio.")
+        else:
+            start_dt = parse_dt(start_date, start_time)
+            end_dt = parse_dt(end_date, end_time)
+            if end_dt <= start_dt:
+                st.error("La hora fin debe ser mayor a la hora inicio.")
+            else:
+                token_id = make_token_id()
+                payload = f"{prefix}|{token_id}"  # QR corto, la app valida en Firestore
+
+                # Guardar en Firestore
+                token_doc(token_id).set({
+                    "token_id": token_id,
+                    "payload": payload,
+                    "client_id": client_id.strip(),
+                    "access_type": access_type.split()[0],  # BZ / L1 / L2
+                    "start_time": start_dt.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "end_time": end_dt.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                    "one_time": bool(one_time),
+                    "used": False,
+                    "used_at": None,
+                    "created_by": st.session_state.username,
+                    "created_at": now_cdmx_str(),
+                    "active": True
+                })
+
+                # QR PNG
                 png = make_qr_png_bytes(payload)
-                z.writestr(f"QR_{cid}.png", png)
-    st.session_state.qr_zip_bytes = zip_buf.getvalue()
 
-st.subheader("4) Descargas")
-colA, colB = st.columns(2)
+                st.success("QR creado y guardado ✅")
+                st.code(payload)
 
-with colA:
-    if st.session_state.excel_bytes:
-        st.download_button(
-            "⬇️ Descargar Excel actualizado",
-            data=st.session_state.excel_bytes,
-            file_name="Drop24_Clientes_Actualizado.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+                st.image(png, caption="QR generado", width=260)
+                st.download_button(
+                    "⬇️ Descargar QR (PNG)",
+                    data=png,
+                    file_name=f"DROP24_QR_{token_id}.png",
+                    mime="image/png"
+                )
+
+    st.divider()
+    st.markdown("### Últimos QRs generados (para control)")
+    # Mostrar últimos 20
+    docs = db.collection(TOKENS_COL).order_by("created_at", direction=firestore.Query.DESCENDING).limit(20).stream()
+    rows = []
+    for d in docs:
+        dd = d.to_dict()
+        rows.append({
+            "token_id": dd.get("token_id"),
+            "client_id": dd.get("client_id"),
+            "access_type": dd.get("access_type"),
+            "start_time": dd.get("start_time"),
+            "end_time": dd.get("end_time"),
+            "one_time": dd.get("one_time"),
+            "used": dd.get("used"),
+            "created_by": dd.get("created_by"),
+            "created_at": dd.get("created_at"),
+            "active": dd.get("active"),
+        })
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.info("Primero genera IDs/QRs para habilitar descarga del Excel.")
-
-with colB:
-    if st.session_state.qr_zip_bytes:
-        st.download_button(
-            "⬇️ Descargar ZIP de QRs (PNG)",
-            data=st.session_state.qr_zip_bytes,
-            file_name="Drop24_QRs.zip",
-            mime="application/zip",
-            use_container_width=True
-        )
-    else:
-        st.info("Primero genera IDs/QRs para habilitar descarga del ZIP de QRs.")
-
-st.subheader("5) Sincronizar a Firebase (Firestore)")
-if st.button("☁️ Subir base a Firestore", use_container_width=True):
-    if st.session_state.df_work is None:
-        st.error("No hay un Excel cargado en sesión.")
-    else:
-        upload_clients_to_firestore(st.session_state.df_work)
-        st.success("Base subida a Firestore ✅")
-        st.rerun()
-
-st.subheader("Vista previa (Excel en sesión)")
-st.dataframe(st.session_state.df_work, use_container_width=True, hide_index=True)
-
-st.divider()
-
-# -----------------------
-# Mostrar DB actual (Firestore)
-# -----------------------
-st.subheader("Base actual en Firestore (lectura)")
-df_db2, last_update2 = download_clients_from_firestore()
-if df_db2.empty:
-    st.warning("Aún no hay datos guardados en Firestore para Drop24.")
-else:
-    st.caption(f"Last update: {last_update2}")
-    st.dataframe(df_db2, use_container_width=True, hide_index=True)
-    st.download_button(
-        "⬇️ Descargar Excel (Firestore)",
-        data=df_to_excel_bytes(df_db2),
-        file_name="Drop24_Clientes_Firestore.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+        st.info("Aún no hay QRs.")
