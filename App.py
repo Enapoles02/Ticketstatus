@@ -736,7 +736,7 @@ with tab_objs[1]:
         
                 # 2) Ventana fija: 15 min (Buzón)
                 start_dt = now_mx().replace(second=0, microsecond=0)
-                end_dt = start_dt + pd.Timedelta(minutes=15)
+                end_dt = start_dt + timedelta(minutes=15)
         
                 # 3) Lockers: ventana fija por slot (1 hora)
                 if access_type.startswith("L") and slot_label:
