@@ -530,115 +530,114 @@ with tab_objs[1]:
             """,
             unsafe_allow_html=True,
         )
-        st.stop()
-
-    st.markdown(
-        f"""
-        <div class="card">
-        <b>Sesión activa:</b> {st.session_state.username}<br>
-        <span class="note">Genera un QR con ventana de tiempo. Ideal para distinguir usuarios y reservas.</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        client_id = st.text_input("Client ID (opcional)", placeholder="CNA1234...")
-    with c2:
-        access_type = st.selectbox("Acceso", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
-    with c3:
-        one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
-
-    st.markdown("### Ventana de tiempo (CDMX)")
-    d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
-    with d1:
-        start_date = st.date_input("Inicio (fecha)", value=now_mx().date(), key="sd")
-    with t1:
-        start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="st")
-    with d2:
-        end_date = st.date_input("Fin (fecha)", value=now_mx().date(), key="ed")
-    with t2:
-        end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="et")
-
-    prefix = st.text_input("Prefijo QR", value="DROP24")
-
-    if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
-        start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
-        end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
-
-        if end_dt <= start_dt:
-            st.error("La hora fin debe ser mayor que la hora inicio.")
-        else:
-            token_id = make_token_id()
-            payload_qr = f"{prefix}|{token_id}"  # QR corto
-
-            token_ref(token_id).set({
-                "token_id": token_id,
-                "payload": payload_qr,
-                "username": st.session_state.username,
-                "client_id": (client_id or "").strip(),
-                "access_type": access_type.split()[0],  # BZ/L1/L2
-
-                # Strings (display)
-                "start_time": dt_to_str(start_dt),
-                "end_time": dt_to_str(end_dt),
-
-                # Timestamps reales (para Android)
-                "start_ts": start_dt,
-                "end_ts": end_dt,
-
-                "one_time": bool(one_time),
-                "used": False,
-                "used_at": None,
-                "active": True,
-                "created_at": now_mx_str(),
-                "created_by": st.session_state.username,
-            })
-
-            png = make_qr_png_bytes(payload_qr)
-
-            st.success("QR creado y guardado ✅")
-            st.code(payload_qr)
-            st.image(png, caption="QR generado", width=260)
-
-            st.download_button(
-                "⬇️ Descargar QR (PNG)",
-                data=png,
-                file_name=f"DROP24_QR_{token_id}.png",
-                mime="image/png",
-                use_container_width=True,
-            )
-
-    st.markdown("---")
-    st.markdown("### Mis últimos QRs")
-    rows = []
-    try:
-        docs = (
-            db.collection(TOKENS_COL)
-            .where("created_by", "==", st.session_state.username)
-            .limit(25)
-            .stream()
-        )
-        for d in docs:
-            x = d.to_dict() or {}
-            rows.append({
-                "token_id": x.get("token_id"),
-                "access_type": x.get("access_type"),
-                "start_time": x.get("start_time"),
-                "end_time": x.get("end_time"),
-                "one_time": x.get("one_time"),
-                "used": x.get("used"),
-                "active": x.get("active"),
-                "created_at": x.get("created_at"),
-            })
-    except Exception as e:
-        st.error(f"Error leyendo QRs: {e}")
-
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.info("Aún no has generado QRs.")
+        st.markdown(
+            f"""
+            <div class="card">
+            <b>Sesión activa:</b> {st.session_state.username}<br>
+            <span class="note">Genera un QR con ventana de tiempo. Ideal para distinguir usuarios y reservas.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            client_id = st.text_input("Client ID (opcional)", placeholder="CNA1234...")
+        with c2:
+            access_type = st.selectbox("Acceso", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
+        with c3:
+            one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
+
+        st.markdown("### Ventana de tiempo (CDMX)")
+        d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
+        with d1:
+            start_date = st.date_input("Inicio (fecha)", value=now_mx().date(), key="sd")
+        with t1:
+            start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="st")
+        with d2:
+            end_date = st.date_input("Fin (fecha)", value=now_mx().date(), key="ed")
+        with t2:
+            end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="et")
+
+        prefix = st.text_input("Prefijo QR", value="DROP24")
+
+        if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
+            start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
+            end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
+
+            if end_dt <= start_dt:
+                st.error("La hora fin debe ser mayor que la hora inicio.")
+            else:
+                token_id = make_token_id()
+                payload_qr = f"{prefix}|{token_id}"
+
+                token_ref(token_id).set({
+                    "token_id": token_id,
+                    "payload": payload_qr,
+                    "username": st.session_state.username,
+                    "client_id": (client_id or "").strip(),
+                    "access_type": access_type.split()[0],
+
+                    "start_time": dt_to_str(start_dt),
+                    "end_time": dt_to_str(end_dt),
+
+                    "start_ts": start_dt,
+                    "end_ts": end_dt,
+
+                    "one_time": bool(one_time),
+                    "used": False,
+                    "used_at": None,
+                    "active": True,
+                    "created_at": now_mx_str(),
+                    "created_by": st.session_state.username,
+                })
+
+                png = make_qr_png_bytes(payload_qr)
+
+                st.success("QR creado y guardado ✅")
+                st.code(payload_qr)
+                st.image(png, caption="QR generado", width=260)
+
+                st.download_button(
+                    "⬇️ Descargar QR (PNG)",
+                    data=png,
+                    file_name=f"DROP24_QR_{token_id}.png",
+                    mime="image/png",
+                    use_container_width=True,
+                )
+
+        st.markdown("---")
+        st.markdown("### Mis últimos QRs")
+
+        rows = []
+        try:
+            docs = (
+                db.collection(TOKENS_COL)
+                .where("created_by", "==", st.session_state.username)
+                .limit(25)
+                .stream()
+            )
+            for d in docs:
+                x = d.to_dict() or {}
+                rows.append({
+                    "token_id": x.get("token_id"),
+                    "access_type": x.get("access_type"),
+                    "start_time": x.get("start_time"),
+                    "end_time": x.get("end_time"),
+                    "one_time": x.get("one_time"),
+                    "used": x.get("used"),
+                    "active": x.get("active"),
+                    "created_at": x.get("created_at"),
+                })
+        except Exception as e:
+            st.error(f"Error leyendo QRs: {e}")
+
+        if rows:
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no has generado QRs.")
+
 
 # =================================================
 # TAB 3: ADMIN
