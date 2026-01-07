@@ -697,8 +697,7 @@ import textwrap
 # =================================================
 # CONÓCENOS
 # =================================================
-conocenos_html = f"""
-<div class="card" style="margin-top:28px;">
+conocenos_html = f"""<div class="card" style="margin-top:28px;">
   <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
     {logo_html}
     <div>
@@ -721,10 +720,10 @@ conocenos_html = f"""
     <span class="pill">Accesos con QR</span>
     <span class="pill">Tecnología Drop24</span>
   </div>
-</div>
-"""
+</div>"""
 
-components.html(conocenos_html, height=320)
+st.markdown(conocenos_html, unsafe_allow_html=True)
+
 
 # =================================================
 # FOOTER (logo abajo)
