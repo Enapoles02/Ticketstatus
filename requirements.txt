@@ -1,6 +1,7 @@
 streamlit
 pandas
-openpyxl
 firebase-admin
 qrcode
-pillow
+Pillow
+bcrypt
+openpyxl
