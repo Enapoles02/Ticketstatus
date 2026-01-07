@@ -266,6 +266,40 @@ def is_admin():
     return entered == (ADMIN_CODE or "").strip()
 
 # =================================================
+# QR SECURITY HELPERS (NUEVO)
+# =================================================
+def get_active_qr_for_user(username: str):
+    """Devuelve un QR activo vigente (end_ts > now) si existe."""
+    now_dt = now_mx()
+    docs = (
+        db.collection(TOKENS_COL)
+        .where("created_by", "==", username)
+        .where("active", "==", True)
+        .where("end_ts", ">", now_dt)
+        .limit(1)
+        .stream()
+    )
+    for d in docs:
+        return d
+    return None
+
+
+def next_full_hour_slots(start_hour=7, end_hour=21):
+    """Slots de 1 hora: 07:00-08:00 ..."""
+    return [f"{h:02d}:00-{h+1:02d}:00" for h in range(start_hour, end_hour)]
+
+
+def slot_to_datetimes(slot_label: str, day_date):
+    """Convierte '07:00-08:00' + date -> start_dt, end_dt (CDMX)"""
+    a, b = slot_label.split("-")
+    sh, sm = map(int, a.split(":"))
+    eh, em = map(int, b.split(":"))
+    start_dt = datetime.combine(day_date, dtime(sh, sm)).replace(tzinfo=MEXICO_TZ)
+    end_dt = datetime.combine(day_date, dtime(eh, em)).replace(tzinfo=MEXICO_TZ)
+    return start_dt, end_dt
+
+
+# =================================================
 # PRECIOS DROP24 (EDITA AQUÍ)
 # =================================================
 PRICES = {
@@ -665,56 +699,71 @@ with tab_objs[1]:
         with c3:
             one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
 
-        st.markdown("### Ventana de tiempo (CDMX)")
-        d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
-        with d1:
-            start_date = st.date_input("Inicio (fecha)", value=now_mx().date(), key="sd")
-        with t1:
-            start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="st")
-        with d2:
-            end_date = st.date_input("Fin (fecha)", value=now_mx().date(), key="ed")
-        with t2:
-            end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="et")
-
-        prefix = st.text_input("Prefijo QR", value="DROP24")
-
-        if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
-            start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
-            end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
-
-            if end_dt <= start_dt:
-                st.error("La hora fin debe ser mayor que la hora inicio.")
+        st.markdown("### 🔒 Ventana fija (seguridad)")
+        st.caption("Los QRs duran **15 minutos** y solo puedes tener **1 QR activo** a la vez.")
+        
+        prefix = st.text_input("Prefijo QR", value="DROP24", key="qr_prefix_fixed")
+        
+        # Lockers: apartados solo por 1 hora
+        slot_label = None
+        locker_day = now_mx().date()
+        
+        if access_type.startswith("L"):
+            st.markdown("#### ⏱️ Apartado de locker (1 hora)")
+            locker_day = st.date_input("Día del apartado", value=now_mx().date(), key="locker_day")
+            slot_label = st.selectbox("Horario (bloques de 1 hora)", next_full_hour_slots(7, 21), key="locker_slot")
+            st.warning("⚠️ Si no se recoge a tiempo, se guarda en almacén y tendrás que solicitar apoyo vía WhatsApp.")
+        
+        if st.button("✅ Crear QR (15 min)", use_container_width=True, key="btn_create_qr_fixed"):
+            # 1) Bloqueo: si ya tiene uno activo vigente, no crear otro
+            existing = get_active_qr_for_user(st.session_state.username)
+            if existing:
+                x = existing.to_dict() or {}
+                st.error(f"Ya tienes un QR activo vigente hasta: **{x.get('end_time','')}**. Espera a que termine.")
             else:
                 token_id = make_token_id()
                 payload_qr = f"{prefix}|{token_id}"
-
+        
+                # 2) Ventana fija: 15 min (Buzón)
+                start_dt = now_mx().replace(second=0, microsecond=0)
+                end_dt = start_dt + pd.Timedelta(minutes=15)
+        
+                # 3) Lockers: ventana fija por slot (1 hora)
+                if access_type.startswith("L") and slot_label:
+                    start_dt, end_dt = slot_to_datetimes(slot_label, locker_day)
+        
                 token_ref(token_id).set({
                     "token_id": token_id,
                     "payload": payload_qr,
                     "username": st.session_state.username,
                     "client_id": (client_id or "").strip(),
                     "access_type": access_type.split()[0],
-
+        
                     "start_time": dt_to_str(start_dt),
                     "end_time": dt_to_str(end_dt),
-
+        
                     "start_ts": start_dt,
                     "end_ts": end_dt,
-
+        
                     "one_time": bool(one_time),
                     "used": False,
                     "used_at": None,
                     "active": True,
+        
+                    # info extra locker
+                    "locker_day": str(locker_day) if access_type.startswith("L") else None,
+                    "locker_slot": slot_label if access_type.startswith("L") else None,
+        
                     "created_at": now_mx_str(),
                     "created_by": st.session_state.username,
                 })
-
+        
                 png = make_qr_png_bytes(payload_qr)
-
+        
                 st.success("QR creado y guardado ✅")
                 st.code(payload_qr)
                 st.image(png, caption="QR generado", width=260)
-
+        
                 st.download_button(
                     "⬇️ Descargar QR (PNG)",
                     data=png,
@@ -722,6 +771,52 @@ with tab_objs[1]:
                     mime="image/png",
                     use_container_width=True,
                 )
+        
+                
+                if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
+                    start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
+                    end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
+        
+                    if end_dt <= start_dt:
+                        st.error("La hora fin debe ser mayor que la hora inicio.")
+                    else:
+                        token_id = make_token_id()
+                        payload_qr = f"{prefix}|{token_id}"
+        
+                        token_ref(token_id).set({
+                            "token_id": token_id,
+                            "payload": payload_qr,
+                            "username": st.session_state.username,
+                            "client_id": (client_id or "").strip(),
+                            "access_type": access_type.split()[0],
+        
+                            "start_time": dt_to_str(start_dt),
+                            "end_time": dt_to_str(end_dt),
+        
+                            "start_ts": start_dt,
+                            "end_ts": end_dt,
+        
+                            "one_time": bool(one_time),
+                            "used": False,
+                            "used_at": None,
+                            "active": True,
+                            "created_at": now_mx_str(),
+                            "created_by": st.session_state.username,
+                        })
+        
+                        png = make_qr_png_bytes(payload_qr)
+        
+                        st.success("QR creado y guardado ✅")
+                        st.code(payload_qr)
+                        st.image(png, caption="QR generado", width=260)
+        
+                        st.download_button(
+                            "⬇️ Descargar QR (PNG)",
+                            data=png,
+                            file_name=f"DROP24_QR_{token_id}.png",
+                            mime="image/png",
+                            use_container_width=True,
+                        )
 
         st.markdown("---")
         st.markdown("### Mis últimos QRs")
@@ -729,11 +824,13 @@ with tab_objs[1]:
         rows = []
         try:
             docs = (
-                db.collection(TOKENS_COL)
-                .where("created_by", "==", st.session_state.username)
-                .limit(25)
-                .stream()
-            )
+            db.collection(TOKENS_COL)
+            .where("created_by", "==", st.session_state.username)
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(25)
+            .stream()
+        )
+
             for d in docs:
                 x = d.to_dict() or {}
                 rows.append({
