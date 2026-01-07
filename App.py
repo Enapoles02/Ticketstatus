@@ -691,38 +691,38 @@ if is_admin():
                     })
                     st.success("Actualizado ✅")
 
+import textwrap
+
 # =================================================
 # CONÓCENOS
 # =================================================
 st.markdown(
-    f"""
+    textwrap.dedent(f"""
     <div class="card" style="margin-top:28px;">
         <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
             {logo_html}
             <div>
-                <h3 style="margin:0;color:{C_TEAL_DARK};font-weight:900;">
-                    Conócenos
-                </h3>
-                <div class="note">
-                    Tecnología, confianza y comodidad para tu ropa
-                </div>
+                <h3 style="margin:0;color:{C_TEAL_DARK};font-weight:900;">Conócenos</h3>
+                <div class="note">Tecnología, confianza y comodidad para tu ropa</div>
             </div>
         </div>
 
         <hr style="margin:14px 0;border:none;border-top:1px solid #E5EFF3;">
 
-        <p style="font-size:14px;line-height:1.6;">
+        <p style="font-size:14px;line-height:1.6;margin:0 0 12px 0;">
             <b>Drop24</b> es una plataforma de lavandería moderna que combina
             <b>tecnología</b>, <b>automatización</b> y <b>atención responsable</b>.
             Estamos preparando nuestro <b>servicio a domicilio</b> para que puedas
             olvidarte por completo del lavado de ropa.
         </p>
 
-        <div class="pill">Servicio a domicilio · Próximamente</div>
-        <div class="pill">Accesos con QR</div>
-        <div class="pill">Tecnología Drop24</div>
+        <div>
+            <span class="pill">Servicio a domicilio · Próximamente</span>
+            <span class="pill">Accesos con QR</span>
+            <span class="pill">Tecnología Drop24</span>
+        </div>
     </div>
-    """,
+    """),
     unsafe_allow_html=True,
 )
 
