@@ -182,6 +182,8 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+
 # =================================================
 # FIREBASE (NO TOCAR)
 # =================================================
@@ -504,6 +506,52 @@ st.markdown(
 st.markdown("<div class='big-title'>Drop24 · Usuarios & QR</div>", unsafe_allow_html=True)
 st.markdown("<div class='subtitle'>Registro de clientes y domicilio para servicio a domicilio (próximamente)</div>", unsafe_allow_html=True)
 
+st.markdown("---")
+
+with st.container():
+    colL, colR = st.columns([2, 3], vertical_alignment="center")
+
+    # IZQUIERDA: estado sesión
+    with colL:
+        if st.session_state.auth and st.session_state.username:
+            st.success(f"✅ Sesión activa: {st.session_state.username}")
+            if st.button("Cerrar sesión", use_container_width=True, key="btn_logout_top"):
+                st.session_state.auth = False
+                st.session_state.username = None
+                st.rerun()
+        else:
+            st.info("🔐 Inicia sesión para generar QRs y usar funciones avanzadas.")
+
+    # DERECHA: formulario login
+    with colR:
+        expanded_login = not (st.session_state.auth and st.session_state.username)
+        with st.expander("👤 Login", expanded=expanded_login):
+            u_in = st.text_input("Usuario", value=st.session_state.get("username") or "", key="login_user_top")
+            p_in = st.text_input("Contraseña", type="password", key="login_pass_top")
+
+            if st.button("Ingresar", use_container_width=True, key="btn_login_top"):
+                u = (u_in or "").strip().lower()
+                if not u or not p_in:
+                    st.error("Completa usuario y contraseña.")
+                else:
+                    doc = user_ref(u).get()
+                    if not doc.exists:
+                        st.error("Usuario no existe.")
+                    else:
+                        data = doc.to_dict() or {}
+                        if not data.get("active", True):
+                            st.error("Usuario desactivado. Contacta a Drop24.")
+                        elif not check_password(p_in, data.get("password_hash", "")):
+                            st.error("Contraseña incorrecta.")
+                        else:
+                            st.session_state.auth = True
+                            st.session_state.username = u
+                            st.success(f"Bienvenido(a), {data.get('full_name','')} ✅")
+                            st.rerun()
+
+st.markdown("---")
+
+
 # =================================================
 # SIDEBAR (LOGIN + ADMIN)
 # =================================================
@@ -592,9 +640,10 @@ st.sidebar.markdown(
 # =================================================
 # MAIN TABS
 # =================================================
-tabs = ["📝 Registro", "📲 QR Agendado", "🤖 Chatbot"]
+tabs = ["📝 Registro", "📲 QR Agendado", "🤖 Chatbot", "ℹ️ Cómo funciona"]
 if is_admin():
     tabs.append("🛡️ Admin")
+
 
 tab_objs = st.tabs(tabs)
 
@@ -959,10 +1008,81 @@ with tab_objs[2]:
         st.caption("Tip: usa las FAQ para respuestas rápidas.")
 
 # =================================================
+# TAB 4: CÓMO FUNCIONA
+# =================================================
+with tab_objs[3]:
+    st.markdown(
+        """
+        <div class="card">
+        <b>ℹ️ ¿Cómo funciona Drop24?</b><br>
+        Aquí te explicamos paso a paso cómo usar el portal, el QR agendado y el buzón/lockers.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="card">
+        <b>1) 📝 Registro</b><br>
+        - Crea tu usuario y contraseña.<br>
+        - Captura tu teléfono y correo.<br>
+        - Agrega tu domicilio (para servicio a domicilio próximamente).<br>
+        </div>
+
+        <div class="card">
+        <b>2) 📲 Login</b><br>
+        - Inicia sesión desde la parte superior (más cómodo en teléfono).<br>
+        - Con sesión activa podrás generar QRs agendados y ver tus tokens.<br>
+        </div>
+
+        <div class="card">
+        <b>3) 🔒 QR Agendado (seguridad)</b><br>
+        - Puedes generar un QR con ventana de tiempo.<br>
+        - Por seguridad: el QR dura <b>15 minutos</b> (buzón) y solo puedes tener <b>1 QR activo</b> a la vez.<br>
+        - Si es de 1 uso, se marca como usado después de abrir.<br>
+        </div>
+
+        <div class="card">
+        <b>4) 🧺 Buzón 24/7</b><br>
+        - Te registras y obtienes tu QR.<br>
+        - Escaneas el QR en el buzón y depositas tu ropa identificada.<br>
+        - Recolectamos en el siguiente horario hábil y comenzamos el proceso.<br>
+        </div>
+
+        <div class="card">
+        <b>5) 🔐 Lockers (L1 / L2)</b><br>
+        - Si eliges Locker, seleccionas un rango de 1 hora (ej. 19:00–20:00).<br>
+        - Tu QR solo funciona dentro de esa ventana.<br>
+        - Si no se recoge a tiempo, se guarda en almacén y se solicita apoyo por WhatsApp.<br>
+        </div>
+
+        <div class="card">
+        <b>6) 🤖 Chatbot</b><br>
+        - Resuelve dudas rápidas: precios, buzón, QR, tiempos de entrega y especiales.<br>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="card">
+        <b>💬 Soporte</b><br>
+        ¿Necesitas ayuda con tu QR o locker? Contáctanos por WhatsApp.<br><br>
+        👉 <a href="https://wa.me/523343928767" target="_blank"><b>Escríbenos aquí</b></a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+# =================================================
 # TAB 4: ADMIN
 # =================================================
 if is_admin():
-    with tab_objs[3]:
+    with tab_objs[4]:
         st.subheader("🛡️ Admin · Usuarios")
         st.caption("Control básico: ver usuarios y activar/desactivar.")
 
