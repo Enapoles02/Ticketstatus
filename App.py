@@ -265,91 +265,112 @@ def is_admin():
     entered = (st.session_state.get("admin_code_value", "") or "").strip()
     return entered == (ADMIN_CODE or "").strip()
 
+# =================================================
+# PRECIOS DROP24 (EDITA AQUÍ)
+# =================================================
+PRICES = {
+    # AUTOSERVICIO
+    "lavado_carga_completa": 90,     # hasta 22 kg
+    "secado_30_min": 40,
+    "secado_15_extra": 20,
+    "secado_60_min": 80,
+
+    # DROP EXPRESS (MOSTRADOR)
+    "lavado_secado_por_kg": 32,
+    "promo_15kg": 420,
+
+    # BUZÓN 24/7
+    "buzon_por_kg": 34,
+    "locker_24_7": 30,              # renta locker por servicio (recolección 24/7)
+
+    # ESPECIALES (por pieza)
+    "edredon_ind_matr": 160,
+    "edredon_q_king": 190,
+}
+
+
 # ---------------------------
 # CHATBOT HELPERS (NUEVO)
 # ---------------------------
 def drop24_help_answer(user_text: str) -> str:
-    """
-    Chatbot tipo Help Center (sin IA).
-    Responde por keywords y guía al cliente.
-    """
-    t = (user_text or "").lower().strip()
+    
+    def send_to_drop24_bot(text: str):
+    if not text:
+        return
+    st.session_state.drop24_chat.append({"role": "user", "content": text})
+    reply = drop24_help_answer(text)
+    st.session_state.drop24_chat.append({"role": "assistant", "content": reply})
+    st.rerun()
 
-    # keywords comunes
+    t = (user_text or "").lower().strip()
+    p = PRICES
+
+    # --- PRECIOS ---
+    if any(k in t for k in ["precio", "precios", "cuánto", "cuanto", "costo", "vale", "$", "tarifa"]):
+        return (
+            "💸 **Precios Drop24**\n\n"
+            "### 🧺 Autoservicio\n"
+            f"- Lavado (carga completa hasta 22 kg): **${p['lavado_carga_completa']}**\n"
+            f"- Secado 30 min: **${p['secado_30_min']}**\n"
+            f"- 15 min extra: **${p['secado_15_extra']}**\n"
+            f"- 60 min: **${p['secado_60_min']}**\n\n"
+            "📌 *El precio es por ciclo de lavadora, no por kilo.*\n"
+            "📌 *El cliente trae sus insumos (o puede adquirirlos en mostrador).*\n\n"
+            "### 🧺 Drop Express (Mostrador)\n"
+            "📌 Política: entrega en 24 horas hábiles (sujeto a disponibilidad) · doblado básico incluido.\n"
+            f"- Lavado + Secado: **${p['lavado_secado_por_kg']} por kilo**\n"
+            f"- Promoción (15 kg): **${p['promo_15kg']}**\n"
+            "📌 *Incluye detergente premium y suavizante.*\n"
+            "📌 *Se pesa al recibir. Mínimo de cobro: 3 kg.*\n\n"
+            "### 📦 Buzón inteligente 24/7\n"
+            f"- Ropa general: **${p['buzon_por_kg']} por kilo**\n"
+            f"- Renta de locker (por servicio) / Recolección 24/7: **${p['locker_24_7']}**\n\n"
+            "### 🛏️ Especiales (por pieza)\n"
+            f"- Edredones y cobijas (Individual/Matrimonial): **${p['edredon_ind_matr']}**\n"
+            f"- Edredones y cobijas (Queen/King): **${p['edredon_q_king']}**\n\n"
+            "Si me dices qué vas a lavar (kg o piezas), te calculo el total ✅"
+        )
+
+    # --- BUZÓN ---
     if any(k in t for k in ["buzon", "buzón", "24/7", "depositar", "dejar ropa"]):
         return (
             "🧺 **Buzón 24/7 (Drop24)**\n\n"
-            "1) Te registras en mostrador y te damos tu **QR**.\n"
+            "1) Te registras en mostrador y obtienes tu **QR**.\n"
             "2) Escaneas el QR en el buzón.\n"
-            "3) La puerta se libera y dejas tu ropa en **bolsa/morral** identificado.\n"
-            "4) Nuestro equipo recolecta en el siguiente horario hábil y empieza el proceso.\n\n"
-            "Si me dices tu colonia o si usarás **locker**, te indico la mejor opción."
+            "3) La puerta se libera y depositas tu ropa en bolsa/morral identificado.\n"
+            "4) Recolectamos en el siguiente horario hábil y comenzamos el proceso.\n\n"
+            f"Precio ropa general: **${p['buzon_por_kg']} por kilo**\n"
+            f"Renta de locker (por servicio) / Recolección 24/7: **${p['locker_24_7']}**"
         )
 
-    if any(k in t for k in ["locker", "casillero", "recolección 24/7", "recoger 24"]):
-        return (
-            "🔐 **Lockers / Recolección 24/7**\n\n"
-            "Puedes usar lockers para **entregar o recoger** dentro del horario definido.\n"
-            "Si ya tienes tu QR agendado, dime si es **L1/L2/BZ** y el horario, y te explico el paso a paso."
-        )
-
-    if any(k in t for k in ["qr", "codigo", "token", "agendado", "ventana"]):
-        return (
-            "📲 **QR Agendado**\n\n"
-            "Tu QR contiene un **token** que se valida (activo, horario y si es de 1 uso).\n"
-            "Si tu QR no funciona:\n"
-            "- Revisa que estés dentro de la **ventana de tiempo**\n"
-            "- Confirma que no esté marcado como **used** (si era 1 uso)\n"
-            "- Verifica que el acceso sea correcto: **BZ / L1 / L2**"
-        )
-
-    if any(k in t for k in ["tiempo", "entrega", "cuando", "listo", "24 hrs", "24h"]):
+    # --- ENTREGA ---
+    if any(k in t for k in ["tarda", "entrega", "cuando", "listo", "24 horas", "24hrs", "24 h"]):
         return (
             "⏱️ **Tiempos de entrega**\n\n"
-            "Depende del volumen y tipo de prenda.\n"
-            "Como regla práctica: muchas órdenes se entregan **en 24–48 hrs**.\n\n"
-            "Dime: ¿cuántos kg aprox y si hay edredón/cobijas? y te digo un estimado."
+            "En Drop Express (Mostrador): **Entrega en 24 horas hábiles** (sujeto a disponibilidad).\n"
+            "Si es volumen grande o prendas especiales, puede variar.\n\n"
+            "Dime cuántos kg o si incluye edredón/cobija y te doy un estimado."
         )
 
-    if any(k in t for k in ["mancha", "quem", "quemada", "dañ", "delicad", "especial"]):
+    # --- QR ---
+    if any(k in t for k in ["qr", "token", "agendado", "ventana", "no funciona", "error"]):
         return (
-            "🧴 **Manchas / prendas delicadas**\n\n"
-            "Cuéntame:\n"
-            "1) ¿Qué prenda es y de qué material?\n"
-            "2) ¿Qué mancha es (grasa, tinta, vino, etc.)?\n"
-            "3) ¿Hace cuánto pasó?\n\n"
-            "Con eso te digo el tratamiento recomendado y precauciones."
+            "📲 **Problemas con tu QR (Checklist)**\n\n"
+            "1) Verifica que estás dentro de la **ventana de tiempo**.\n"
+            "2) Si era de **1 uso**, revisa que no esté marcado como **used**.\n"
+            "3) Confirma el acceso correcto: **BZ / L1 / L2**.\n\n"
+            "Si me dices qué mensaje te sale o qué estás intentando abrir, te digo exactamente qué revisar."
         )
 
-    if any(k in t for k in ["precio", "cuanto cuesta", "tarifa", "$", "kg"]):
-        return (
-            "💸 **Precios**\n\n"
-            "Dime qué servicio buscas:\n"
-            "- Lavado por **kg**\n"
-            "- Secado\n"
-            "- Planchado\n"
-            "- Edredones/cobijas\n\n"
-            "y te paso el detalle (o te confirmo el precio vigente en sucursal)."
-        )
-
-    if any(k in t for k in ["horario", "abren", "cierran", "ubicacion", "dirección", "direccion"]):
-        return (
-            "📍 **Ubicación / Horarios**\n\n"
-            "Compárteme qué necesitas:\n"
-            "- **Horario** de mostrador\n"
-            "- **Cómo llegar**\n\n"
-            "y te lo paso. (Si quieres, dime si vienes desde Acoxpa/Coapa)."
-        )
-
+    # --- DEFAULT ---
     return (
         "¡Claro! 🙌\n\n"
-        "Para ayudarte rápido, dime cuál es tu duda:\n"
-        "1) Buzón 24/7\n"
-        "2) QR agendado\n"
-        "3) Tiempos de entrega\n"
-        "4) Precios\n"
-        "5) Prendas delicadas/manchas\n\n"
-        "Escribe el número o cuéntame tu caso."
+        "Escribe una opción o tu duda:\n"
+        "1) **Precios**\n"
+        "2) **Buzón 24/7**\n"
+        "3) **QR agendado**\n"
+        "4) **Tiempos de entrega**\n"
+        "5) **Especiales (edredones/cobijas)**\n"
     )
 
 # =================================================
@@ -747,34 +768,31 @@ with tab_objs[2]:
         st.session_state.drop24_chat = [
             {"role": "assistant", "content": "¡Hola! Soy el asistente de Drop24 🧺 ¿Qué duda tienes hoy?"}
         ]
-
+    
     # FAQ rápida
     with st.expander("📌 Preguntas frecuentes (FAQ)", expanded=False):
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         if c1.button("¿Cómo funciona el buzón 24/7?", use_container_width=True):
-            st.session_state.drop24_chat.append({"role": "user", "content": "¿Cómo funciona el buzón 24/7?"})
-            st.rerun()
+            send_to_drop24_bot("¿Cómo funciona el buzón 24/7?")
         if c2.button("¿Cuánto tarda la entrega?", use_container_width=True):
-            st.session_state.drop24_chat.append({"role": "user", "content": "¿Cuánto tarda la entrega?"})
-            st.rerun()
+            send_to_drop24_bot("¿Cuánto tarda la entrega?")
         if c3.button("Problemas con mi QR", use_container_width=True):
-            st.session_state.drop24_chat.append({"role": "user", "content": "Mi QR no funciona, ¿qué reviso?"})
-            st.rerun()
-
+            send_to_drop24_bot("Mi QR no funciona, ¿qué reviso?")
+        if c4.button("Ver precios", use_container_width=True):
+            send_to_drop24_bot("Precios")
+    
     st.markdown("---")
-
+    
     # pintar chat
     for m in st.session_state.drop24_chat:
         with st.chat_message(m["role"]):
             st.write(m["content"])
-
+    
     # input nativo
     user_text = st.chat_input("Escribe tu duda…")
     if user_text:
-        st.session_state.drop24_chat.append({"role": "user", "content": user_text})
-        reply = drop24_help_answer(user_text)
-        st.session_state.drop24_chat.append({"role": "assistant", "content": reply})
-        st.rerun()
+        send_to_drop24_bot(user_text)
+
 
     # botón limpiar
     colA, colB = st.columns([1, 3])
