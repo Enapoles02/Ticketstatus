@@ -307,6 +307,46 @@ def get_active_qr_for_user(username: str):
 
     return best
 
+# =================================================
+# LOCKER SLOTS (HORA) - REQUIRED
+# =================================================
+def next_full_hour_slots(start_hour=7, end_hour=21):
+    """
+    Devuelve slots de 1 hora en formato 24h:
+    07:00-08:00, 08:00-09:00, ... , 20:00-21:00
+    end_hour es el fin (no incluido).
+    """
+    return [f"{h:02d}:00-{h+1:02d}:00" for h in range(start_hour, end_hour)]
+
+
+def slot_to_datetimes(slot_label: str, day_date):
+    """
+    Convierte '19:00-20:00' + date -> start_dt, end_dt (timezone CDMX)
+    """
+    a, b = slot_label.split("-")
+    sh, sm = map(int, a.split(":"))
+    eh, em = map(int, b.split(":"))
+    start_dt = datetime.combine(day_date, dtime(sh, sm)).replace(tzinfo=MEXICO_TZ)
+    end_dt = datetime.combine(day_date, dtime(eh, em)).replace(tzinfo=MEXICO_TZ)
+    return start_dt, end_dt
+
+
+def slot_to_display(slot_label: str) -> str:
+    """
+    '19:00-20:00' -> '7:00 PM - 8:00 PM'
+    (solo visual, el value real sigue siendo 24h)
+    """
+    a, b = slot_label.split("-")
+
+    def _fmt(x):
+        h, m = map(int, x.split(":"))
+        ampm = "AM" if h < 12 else "PM"
+        hh = h % 12
+        if hh == 0:
+            hh = 12
+        return f"{hh}:{m:02d} {ampm}"
+
+    return f"{_fmt(a)} - {_fmt(b)}"
 
 
 # =================================================
@@ -721,7 +761,16 @@ with tab_objs[1]:
         if access_type.startswith("L"):
             st.markdown("#### ⏱️ Apartado de locker (1 hora)")
             locker_day = st.date_input("Día del apartado", value=now_mx().date(), key="locker_day")
-            slot_label = st.selectbox("Horario (bloques de 1 hora)", next_full_hour_slots(7, 21), key="locker_slot")
+            slots = next_full_hour_slots(7, 21)
+            slot_map = {slot_to_display(s): s for s in slots}  # display -> value real (24h)
+            
+            slot_display = st.selectbox(
+                "Horario (bloques de 1 hora)",
+                list(slot_map.keys()),
+                key="locker_slot_display"
+            )
+            slot_label = slot_map[slot_display]  # esto queda tipo '19:00-20:00'
+
             st.warning("⚠️ Si no se recoge a tiempo, se guarda en almacén y tendrás que solicitar apoyo vía WhatsApp.")
         
         if st.button("✅ Crear QR (15 min)", use_container_width=True, key="btn_create_qr_fixed"):
@@ -783,51 +832,7 @@ with tab_objs[1]:
                 )
         
                 
-                if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
-                    start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
-                    end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
-        
-                    if end_dt <= start_dt:
-                        st.error("La hora fin debe ser mayor que la hora inicio.")
-                    else:
-                        token_id = make_token_id()
-                        payload_qr = f"{prefix}|{token_id}"
-        
-                        token_ref(token_id).set({
-                            "token_id": token_id,
-                            "payload": payload_qr,
-                            "username": st.session_state.username,
-                            "client_id": (client_id or "").strip(),
-                            "access_type": access_type.split()[0],
-        
-                            "start_time": dt_to_str(start_dt),
-                            "end_time": dt_to_str(end_dt),
-        
-                            "start_ts": start_dt,
-                            "end_ts": end_dt,
-        
-                            "one_time": bool(one_time),
-                            "used": False,
-                            "used_at": None,
-                            "active": True,
-                            "created_at": now_mx_str(),
-                            "created_by": st.session_state.username,
-                        })
-        
-                        png = make_qr_png_bytes(payload_qr)
-        
-                        st.success("QR creado y guardado ✅")
-                        st.code(payload_qr)
-                        st.image(png, caption="QR generado", width=260)
-        
-                        st.download_button(
-                            "⬇️ Descargar QR (PNG)",
-                            data=png,
-                            file_name=f"DROP24_QR_{token_id}.png",
-                            mime="image/png",
-                            use_container_width=True,
-                        )
-
+                
         st.markdown("---")
         st.markdown("### Mis últimos QRs")
 
