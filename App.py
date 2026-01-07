@@ -561,6 +561,34 @@ st.sidebar.markdown(
 )
 st.sidebar.caption("Los datos se guardan en Firestore.")
 
+st.sidebar.markdown("---")
+st.sidebar.markdown(
+    """
+    <div style="text-align:center;">
+        <a href="https://wa.me/523343928767" target="_blank" style="text-decoration:none;">
+            <button style="
+                background-color:#25D366;
+                color:white;
+                border:none;
+                border-radius:12px;
+                padding:12px 16px;
+                font-size:14px;
+                font-weight:700;
+                width:100%;
+                cursor:pointer;
+            ">
+                💬 Contáctanos por WhatsApp
+            </button>
+        </a>
+        <div style="font-size:12px;color:#6A7067;margin-top:6px;">
+            Atención y soporte Drop24
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+
 # =================================================
 # MAIN TABS
 # =================================================
