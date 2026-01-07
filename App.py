@@ -1,53 +1,224 @@
 import streamlit as st
 import pandas as pd
-import io
-import re
-import uuid
-import hashlib
-import bcrypt
-import qrcode
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
 import firebase_admin
 from firebase_admin import credentials, firestore
+import uuid
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import re
+import io
+import qrcode
+import bcrypt
 
-# -----------------------
-# Configuración general
-# -----------------------
-st.set_page_config(page_title="Drop24 • Usuarios & QR", page_icon="🧺", layout="wide")
+# =================================================
+# BRANDING / CONFIG (Drop24)
+# =================================================
+# Pon aquí tu logo Drop24 si tienes uno (puede ser URL o dejarlo vacío)
+LOGO_URL = st.secrets.get("drop24_logo_url", "")  # opcional
+
+ORG_NAME = "DROP24"
+ORG_SUB = "Lavandería inteligente · Registro · QR Agendado · Servicio a domicilio (próximamente)"
+
+# Paleta estilo (misma vibra que tu ejemplo)
+C_TEAL_DARK = "#055671"
+C_TEAL_MID = "#6699A5"
+C_CYAN_LIGHT = "#B4DFE8"
+C_BG = "#F9FAF8"
+C_TEXT_MUTED = "#6A7067"
+
+# =================================================
+# STREAMLIT CONFIG
+# =================================================
+st.set_page_config(
+    page_title="Drop24 · Usuarios & QR",
+    page_icon="🧺",
+    layout="wide",
+)
 
 MEXICO_TZ = ZoneInfo("America/Mexico_City")
-ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
 
-# Firestore Collections
-USERS_COL = "drop24_users"          # usuarios registrados
-TOKENS_COL = "drop24_qr_tokens"     # QRs agendados
+# =================================================
+# CSS (MISMO ESTILO QUE TU EJEMPLO)
+# =================================================
+st.markdown(
+    f"""
+    <style>
+    body {{
+        background-color: {C_BG};
+        font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
+        color: #0B1F2A;
+    }}
 
-# Initialize Firebase only once (MISMA LÓGICA)
-if not firebase_admin._apps:
-    creds_attr = st.secrets["firebase_credentials"]
-    creds = creds_attr.to_dict() if hasattr(creds_attr, "to_dict") else creds_attr
-    cred = credentials.Certificate(creds)
-    firebase_admin.initialize_app(cred)
+    .corp-header {{
+        width: 100%;
+        background: linear-gradient(90deg, {C_TEAL_DARK} 0%, {C_TEAL_MID} 55%, {C_CYAN_LIGHT} 100%);
+        color: white;
+        padding: 14px 26px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.18);
+        margin-bottom: 18px;
+        border-radius: 0 0 18px 18px;
+        position: relative;
+        overflow: hidden;
+    }}
 
-db = firestore.client()
+    .corp-header::after {{
+        content: "";
+        position: absolute;
+        top: 0;
+        left: -20%;
+        width: 140%;
+        height: 100%;
+        background: radial-gradient(circle at 80% 50%, rgba(255,255,255,0.85) 0%, rgba(180,223,232,0.35) 30%, rgba(5,86,113,0) 70%);
+        opacity: 0.55;
+        transform: skewX(-18deg);
+    }}
 
-# -----------------------
-# Helpers
-# -----------------------
-def now_cdmx():
+    .corp-header-left {{
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        position: relative;
+        z-index: 2;
+        max-width: 75%;
+    }}
+
+    .corp-logo {{
+        height: 44px;
+        width: auto;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.92);
+        padding: 6px 10px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+    }}
+
+    .corp-header-title {{
+        font-size: 14px;
+        font-weight: 900;
+        color: #FFFFFF;
+        line-height: 1.15;
+        text-transform: uppercase;
+    }}
+
+    .corp-header-sub {{
+        font-size: 12px;
+        opacity: 0.95;
+        color: #EAF7FB;
+        margin-top: 4px;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }}
+
+    .corp-header-right {{
+        font-size: 12px;
+        text-align: right;
+        position: relative;
+        z-index: 2;
+        color: #FFFFFF;
+        opacity: 0.98;
+        min-width: 190px;
+    }}
+
+    .big-title {{
+        font-size: 30px;
+        font-weight: 900;
+        text-align: center;
+        margin-bottom: 4px;
+        color: {C_TEAL_DARK};
+    }}
+
+    .subtitle {{
+        font-size: 14px;
+        text-align: center;
+        color: {C_TEXT_MUTED};
+        margin-bottom: 18px;
+    }}
+
+    .card {{
+        background-color: #FFFFFF;
+        border-left: 6px solid {C_TEAL_DARK};
+        border-radius: 16px;
+        padding: 14px 16px;
+        margin: 8px 0;
+        color: #0B1F2A;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.06);
+    }}
+
+    .pill {{
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background-color: #EAF7FB;
+        color: {C_TEAL_DARK};
+        font-size: 12px;
+        margin: 3px;
+        border: 1px solid {C_CYAN_LIGHT};
+        font-weight: 800;
+    }}
+
+    .note {{
+        color: {C_TEXT_MUTED};
+        font-size: 12px;
+    }}
+
+    /* Botones */
+    .stButton > button {{
+        border-radius: 12px !important;
+        border: 1px solid {C_CYAN_LIGHT} !important;
+    }}
+
+    /* Sidebar */
+    section[data-testid="stSidebar"] {{
+        background: #FFFFFF;
+        border-right: 1px solid rgba(0,0,0,0.06);
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =================================================
+# FIREBASE (NO SE TOCA TU CONEXIÓN)
+# =================================================
+@st.cache_resource
+def init_firebase():
+    firebase_creds = st.secrets["firebase_credentials"]
+    if hasattr(firebase_creds, "to_dict"):
+        firebase_creds = firebase_creds.to_dict()
+
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(firebase_creds)
+        firebase_admin.initialize_app(cred)
+
+    return firestore.client()
+
+db = init_firebase()
+
+# =================================================
+# SECRETS
+# =================================================
+ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")  # en tu secrets: admin_code = "DROP24"
+
+# =================================================
+# COLLECTIONS
+# =================================================
+USERS_COL = "drop24_users"
+TOKENS_COL = "drop24_qr_tokens"
+
+# =================================================
+# HELPERS
+# =================================================
+def now_mx():
     return datetime.now(MEXICO_TZ)
 
-def now_cdmx_str():
-    return now_cdmx().strftime("%Y-%m-%d %H:%M:%S %Z")
+def now_mx_str():
+    return now_mx().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 def normalize_phone(x: str) -> str:
     digits = re.sub(r"\D+", "", (x or "").strip())
     return digits
-
-def sha256_hex(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 def hash_password(pw: str) -> str:
     salt = bcrypt.gensalt(rounds=12)
@@ -59,8 +230,13 @@ def check_password(pw: str, pw_hash: str) -> bool:
     except:
         return False
 
+def user_ref(username: str):
+    return db.collection(USERS_COL).document(username)
+
+def token_ref(token_id: str):
+    return db.collection(TOKENS_COL).document(token_id)
+
 def make_token_id() -> str:
-    # corto y robusto para QR
     return uuid.uuid4().hex[:12].upper()
 
 def make_qr_png_bytes(payload: str) -> bytes:
@@ -77,277 +253,447 @@ def make_qr_png_bytes(payload: str) -> bytes:
     img.save(bio, format="PNG")
     return bio.getvalue()
 
-def user_doc(username: str):
-    return db.collection(USERS_COL).document(username)
+def dt_to_str(dt: datetime) -> str:
+    return dt.astimezone(MEXICO_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 
-def token_doc(token_id: str):
-    return db.collection(TOKENS_COL).document(token_id)
-
-def parse_dt(date_obj, time_obj) -> datetime:
-    # date_input devuelve date, time_input devuelve time
-    dt_naive = datetime.combine(date_obj, time_obj)
-    # convertir a tz CDMX (naive -> aware)
-    return dt_naive.replace(tzinfo=MEXICO_TZ)
-
-def require_fields(d: dict, fields: list[str]) -> list[str]:
+def require_fields(data: dict, required: list[str]) -> list[str]:
     missing = []
-    for f in fields:
-        v = d.get(f)
+    for k in required:
+        v = data.get(k)
         if v is None or str(v).strip() == "":
-            missing.append(f)
+            missing.append(k)
     return missing
 
-# -----------------------
-# Session
-# -----------------------
+def is_admin():
+    entered = st.session_state.get("admin_code_value", "")
+    return (entered or "").strip() == (ADMIN_CODE or "").strip()
+
+# =================================================
+# SESSION
+# =================================================
 if "auth" not in st.session_state:
     st.session_state.auth = False
 if "username" not in st.session_state:
     st.session_state.username = None
 
-# -----------------------
-# UI
-# -----------------------
-st.title("🧺 Drop24 • Registro, Login & QR Agendado")
-st.caption("Registro abierto para usuarios. Genera QRs con ventana de tiempo y valida en app Android.")
+# =================================================
+# HEADER
+# =================================================
+logo_html = f"""<img class="corp-logo" src="{LOGO_URL}" />""" if LOGO_URL else """<div class="corp-logo" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#055671;">DROP24</div>"""
 
-tab_login, tab_register, tab_qr = st.tabs(["🔐 Login", "📝 Registro", "📲 Generar QR (agendado)"])
+st.markdown(
+    f"""
+    <div class="corp-header">
+        <div class="corp-header-left">
+            {logo_html}
+            <div>
+                <div class="corp-header-title">{ORG_NAME}</div>
+                <div class="corp-header-sub">{ORG_SUB}</div>
+            </div>
+        </div>
+        <div class="corp-header-right">
+            <div><b>Portal de Usuarios</b></div>
+            <div style="opacity:0.92;">Registro · Login · QR agendado</div>
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-# -----------------------
-# LOGIN
-# -----------------------
-with tab_login:
-    st.subheader("🔐 Login")
-    col1, col2 = st.columns([1, 1])
+st.markdown("<div class='big-title'>Drop24 · Usuarios & QR</div>", unsafe_allow_html=True)
+st.markdown("<div class='subtitle'>Registro de clientes y domicilio para servicio a domicilio (próximamente)</div>", unsafe_allow_html=True)
 
-    with col1:
-        username = st.text_input("Usuario", placeholder="ej: enapoles")
-        password = st.text_input("Contraseña", type="password")
+# =================================================
+# SIDEBAR (LOGIN + ADMIN)
+# =================================================
+st.sidebar.title("🔐 Accesos")
 
-        if st.button("Ingresar"):
-            u = (username or "").strip().lower()
-            if not u or not password:
-                st.error("Completa usuario y contraseña.")
+with st.sidebar.expander("👤 Login Usuario", expanded=True):
+    u_in = st.text_input("Usuario", value=st.session_state.get("username") or "")
+    p_in = st.text_input("Contraseña", type="password")
+
+    if st.button("Ingresar", use_container_width=True):
+        u = (u_in or "").strip().lower()
+        if not u or not p_in:
+            st.error("Completa usuario y contraseña.")
+        else:
+            doc = user_ref(u).get()
+            if not doc.exists:
+                st.error("Usuario no existe.")
             else:
-                doc = user_doc(u).get()
-                if not doc.exists:
-                    st.error("Usuario no existe.")
+                data = doc.to_dict()
+                if not data.get("active", True):
+                    st.error("Usuario desactivado. Contacta a Drop24.")
+                elif not check_password(p_in, data.get("password_hash", "")):
+                    st.error("Contraseña incorrecta.")
                 else:
-                    data = doc.to_dict()
-                    if not data.get("active", True):
-                        st.error("Usuario desactivado. Contacta a ADMIN.")
-                    elif not check_password(password, data.get("password_hash", "")):
-                        st.error("Contraseña incorrecta.")
-                    else:
-                        st.session_state.auth = True
-                        st.session_state.username = u
-                        st.success(f"Bienvenido: {u} ✅")
-                        st.rerun()
+                    st.session_state.auth = True
+                    st.session_state.username = u
+                    st.success(f"Bienvenido(a), {data.get('full_name','')} ✅")
+                    st.rerun()
 
-    with col2:
-        st.info(
-            "Tip: si quieres que solo ADMIN pueda aprobar usuarios, "
-            "puedo agregarte un flujo de estatus (PENDING → ACTIVE)."
-        )
-
-    st.divider()
-    if st.session_state.auth:
-        st.success(f"Sesión activa: {st.session_state.username}")
-        if st.button("Cerrar sesión"):
+    if st.session_state.auth and st.session_state.username:
+        st.caption(f"Sesión: **{st.session_state.username}**")
+        if st.button("Cerrar sesión", use_container_width=True):
             st.session_state.auth = False
             st.session_state.username = None
             st.rerun()
 
-# -----------------------
-# REGISTRO
-# -----------------------
-with tab_register:
-    st.subheader("📝 Registro de usuario (campos obligatorios)")
+st.sidebar.markdown("---")
+with st.sidebar.expander("🛡️ Admin (solo para control)", expanded=False):
+    st.text_input("Código admin", type="password", key="admin_code_value")
+    if is_admin():
+        st.success("Modo ADMIN activado.")
+    else:
+        st.info("Ingresa el código para ver panel Admin.")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🧺 Acciones")
+st.sidebar.markdown(
+    """
+    <span class="pill">Registro</span>
+    <span class="pill">Login</span>
+    <span class="pill">QR</span>
+    """,
+    unsafe_allow_html=True,
+)
+st.sidebar.caption("Los datos se guardan en Firestore.")
+
+# =================================================
+# MAIN TABS
+# =================================================
+tabs = ["📝 Registro", "📲 QR Agendado"]
+if is_admin():
+    tabs.append("🛡️ Admin")
+
+tab_objs = st.tabs(tabs)
+
+# =================================================
+# TAB 1: REGISTRO (SIN INE + DOMICILIO COMPLETO)
+# =================================================
+with tab_objs[0]:
+    st.markdown(
+        """
+        <div class="card">
+        <b>Registro de usuario Drop24</b><br>
+        Este registro también recopila tu domicilio <b>para el servicio a domicilio (próximamente)</b>.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     with st.form("register_form", clear_on_submit=False):
-        username_r = st.text_input("Usuario (único)", placeholder="ej: drop24_user1").strip().lower()
-        pw1 = st.text_input("Contraseña", type="password")
-        pw2 = st.text_input("Confirmar contraseña", type="password")
-
+        st.subheader("Datos del usuario")
         c1, c2, c3 = st.columns(3)
         with c1:
-            full_name = st.text_input("Nombre completo *")
+            username = st.text_input("Usuario (único) *", placeholder="ej: cliente001").strip().lower()
         with c2:
-            phone = st.text_input("Teléfono (WhatsApp) *")
+            full_name = st.text_input("Nombre completo *", placeholder="Nombre y apellido")
         with c3:
-            email = st.text_input("Email *")
+            phone = st.text_input("Teléfono (WhatsApp) *", placeholder="55 1234 5678")
 
-        
-        st.markdown("### Ubicación")
-        c7, c8 = st.columns(2)
+        c4, c5 = st.columns(2)
+        with c4:
+            email = st.text_input("Email *", placeholder="correo@ejemplo.com")
+        with c5:
+            preferred_contact = st.selectbox("Contacto preferido", ["WhatsApp", "Llamada", "Email"])
+
+        st.subheader("Seguridad de cuenta")
+        p1 = st.text_input("Contraseña *", type="password")
+        p2 = st.text_input("Confirmar contraseña *", type="password")
+
+        st.markdown("---")
+        st.subheader("Domicilio (para servicio a domicilio · próximamente)")
+
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            street = st.text_input("Calle *")
+        with a2:
+            ext_number = st.text_input("Número exterior *")
+        with a3:
+            int_number = st.text_input("Número interior (opcional)")
+
+        b1, b2, b3 = st.columns(3)
+        with b1:
+            neighborhood = st.text_input("Colonia *")
+        with b2:
+            borough = st.text_input("Alcaldía / Municipio *")
+        with b3:
+            postal_code = st.text_input("Código Postal *", max_chars=5)
+
+        c6, c7, c8 = st.columns(3)
+        with c6:
+            city = st.text_input("Ciudad *", value="CDMX")
         with c7:
-            neighborhood = st.text_input("Colonia/Alcaldía *", placeholder="Coapa / Coyoacán / etc.")
+            state = st.text_input("Estado *", value="Ciudad de México")
         with c8:
-            address_ref = st.text_input("Referencia (opcional)", placeholder="cerca de…")
+            country = st.text_input("País", value="México")
 
-        consent_gps = st.checkbox("Consentimiento para guardar GPS (opcional)", value=False)
-        gps_lat = st.text_input("Latitud (opcional)", disabled=not consent_gps)
-        gps_lon = st.text_input("Longitud (opcional)", disabled=not consent_gps)
+        d1, d2 = st.columns(2)
+        with d1:
+            between_streets = st.text_input("Entre calles (opcional)", placeholder="Ej. Acoxpa y…")
+        with d2:
+            references = st.text_input("Referencias (opcional)", placeholder="Portón negro, edificio…")
+
+        delivery_notes = st.text_area("Instrucciones para entrega (opcional)", placeholder="Horario preferido, si hay caseta, etc.")
+
+        consent = st.checkbox("Acepto que Drop24 guarde mi domicilio para el servicio a domicilio (próximamente) *", value=False)
 
         submitted = st.form_submit_button("Crear cuenta")
 
     if submitted:
-        # Validaciones
         payload = {
-            "username": username_r,
-            "full_name": full_name.strip(),
+            "username": username,
+            "full_name": (full_name or "").strip(),
             "phone": normalize_phone(phone),
-            "email": email.strip().lower(),
-            "ine_last4": (ine_last4 or "").strip(),
-            "ine_verified": bool(ine_verified),
-            "neighborhood": neighborhood.strip(),
-            "address_ref": address_ref.strip(),
+            "email": (email or "").strip().lower(),
+            "preferred_contact": preferred_contact,
+            "street": (street or "").strip(),
+            "ext_number": (ext_number or "").strip(),
+            "int_number": (int_number or "").strip(),
+            "neighborhood": (neighborhood or "").strip(),
+            "borough": (borough or "").strip(),
+            "postal_code": (postal_code or "").strip(),
+            "city": (city or "").strip(),
+            "state": (state or "").strip(),
+            "country": (country or "").strip(),
+            "between_streets": (between_streets or "").strip(),
+            "references": (references or "").strip(),
+            "delivery_notes": (delivery_notes or "").strip(),
         }
 
-        required = ["username", "full_name", "phone", "email", "ine_last4", "neighborhood"]
+        required = [
+            "username", "full_name", "phone", "email",
+            "street", "ext_number", "neighborhood", "borough", "postal_code",
+            "city", "state"
+        ]
         missing = require_fields(payload, required)
+
         if missing:
             st.error(f"Faltan campos obligatorios: {', '.join(missing)}")
-        elif len(payload["ine_last4"]) != 4 or not payload["ine_last4"].isdigit():
-            st.error("INE últimos 4 debe ser numérico de 4 dígitos.")
-        elif not payload["phone"]:
-            st.error("Teléfono inválido.")
-        elif pw1 != pw2:
+        elif not payload["postal_code"].isdigit() or len(payload["postal_code"]) != 5:
+            st.error("El Código Postal debe ser de 5 dígitos.")
+        elif p1 != p2:
             st.error("Las contraseñas no coinciden.")
-        elif len(pw1) < 6:
+        elif len(p1) < 6:
             st.error("Contraseña muy corta (mínimo 6).")
-        elif not ine_verified:
-            st.error("Debes marcar INE verificada (si quieres, luego lo cambiamos a flujo de aprobación).")
+        elif not consent:
+            st.error("Debes aceptar el guardado de domicilio para continuar.")
         else:
-            # Hash de INE (si el usuario insiste en capturarla)
-            # Recomendación: NO usar esto. Si lo usan, solo guardamos HASH.
-            ine_hash = None
-            if ine_hash_input and ine_hash_input.strip():
-                ine_hash = sha256_hex(ine_hash_input.strip())
-
-            # GPS opcional
-            gps = None
-            if consent_gps and gps_lat.strip() and gps_lon.strip():
-                gps = {"lat": gps_lat.strip(), "lon": gps_lon.strip()}
-
-            doc_ref = user_doc(username_r)
-            if doc_ref.get().exists:
+            ref = user_ref(payload["username"])
+            if ref.get().exists:
                 st.error("Ese usuario ya existe. Elige otro.")
             else:
-                doc_ref.set({
-                    "username": username_r,
-                    "password_hash": hash_password(pw1),
+                ref.set({
+                    "username": payload["username"],
+                    "password_hash": hash_password(p1),
                     "full_name": payload["full_name"],
                     "phone": payload["phone"],
                     "email": payload["email"],
-                    "ine_last4": payload["ine_last4"],
-                    "ine_hash": ine_hash,            # solo hash, nunca el número en claro
-                    "ine_verified": payload["ine_verified"],
-                    "neighborhood": payload["neighborhood"],
-                    "address_ref": payload["address_ref"],
-                    "gps": gps,
+                    "preferred_contact": payload["preferred_contact"],
+                    "address": {
+                        "street": payload["street"],
+                        "ext_number": payload["ext_number"],
+                        "int_number": payload["int_number"],
+                        "neighborhood": payload["neighborhood"],
+                        "borough": payload["borough"],
+                        "postal_code": payload["postal_code"],
+                        "city": payload["city"],
+                        "state": payload["state"],
+                        "country": payload["country"],
+                        "between_streets": payload["between_streets"],
+                        "references": payload["references"],
+                        "delivery_notes": payload["delivery_notes"],
+                    },
+                    "delivery_service_future": True,
                     "active": True,
                     "role": "USER",
-                    "created_at": now_cdmx_str(),
+                    "created_at": now_mx_str(),
+                    "updated_at": now_mx_str(),
                 })
-                st.success("Cuenta creada ✅ Ya puedes ir a Login e ingresar.")
+                st.success("Cuenta creada ✅ Ya puedes iniciar sesión en el sidebar.")
 
-# -----------------------
-# GENERAR QR (agendado)
-# -----------------------
-with tab_qr:
-    st.subheader("📲 Generar QR (agendado)")
-
+# =================================================
+# TAB 2: QR AGENDADO (requiere login)
+# =================================================
+with tab_objs[1]:
     if not st.session_state.auth:
-        st.info("Primero inicia sesión para generar QRs.")
+        st.info("Inicia sesión para generar QRs agendados.")
+        st.markdown(
+            """
+            <div class="card">
+            <b>¿Qué hace este QR?</b><br>
+            El QR contiene un token corto. La app Android validará en Firestore si está activo, dentro de horario y (si aplica) si ya fue usado.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.stop()
 
-    st.success(f"Sesión: {st.session_state.username}")
+    st.markdown(
+        f"""
+        <div class="card">
+        <b>Sesión activa:</b> {st.session_state.username}<br>
+        <span class="note">Genera un QR con ventana de tiempo. Ideal para distinguir usuarios y reservas.</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # Inputs del QR
     c1, c2, c3 = st.columns(3)
     with c1:
-        client_id = st.text_input("Client ID (de tu base)", placeholder="CNA1234....")
+        client_id = st.text_input("Client ID (si ya lo tienes en tu base) (opcional)", placeholder="CNA1234...")
     with c2:
-        access_type = st.selectbox("Qué abre este QR", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
+        access_type = st.selectbox("Acceso", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
     with c3:
         one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
 
     st.markdown("### Ventana de tiempo (CDMX)")
-    d1, t1, d2, t2 = st.columns([1,1,1,1])
+    d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
     with d1:
-        start_date = st.date_input("Inicio (fecha)", value=now_cdmx().date())
+        start_date = st.date_input("Inicio (fecha)", value=now_mx().date())
     with t1:
-        start_time = st.time_input("Inicio (hora)", value=now_cdmx().time().replace(second=0, microsecond=0))
+        start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0))
     with d2:
-        end_date = st.date_input("Fin (fecha)", value=now_cdmx().date())
+        end_date = st.date_input("Fin (fecha)", value=now_mx().date())
     with t2:
-        end_time = st.time_input("Fin (hora)", value=(now_cdmx().time().replace(second=0, microsecond=0)))
+        end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0))
 
     prefix = st.text_input("Prefijo QR", value="DROP24")
 
-    if st.button("✅ Crear QR"):
-        if not client_id.strip():
-            st.error("Client ID es obligatorio.")
+    if st.button("✅ Crear QR", use_container_width=True):
+        start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
+        end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
+
+        if end_dt <= start_dt:
+            st.error("La hora fin debe ser mayor que la hora inicio.")
         else:
-            start_dt = parse_dt(start_date, start_time)
-            end_dt = parse_dt(end_date, end_time)
-            if end_dt <= start_dt:
-                st.error("La hora fin debe ser mayor a la hora inicio.")
-            else:
-                token_id = make_token_id()
-                payload = f"{prefix}|{token_id}"  # QR corto, la app valida en Firestore
+            token_id = make_token_id()
+            payload_qr = f"{prefix}|{token_id}"  # QR corto
 
-                # Guardar en Firestore
-                token_doc(token_id).set({
-                    "token_id": token_id,
-                    "payload": payload,
-                    "client_id": client_id.strip(),
-                    "access_type": access_type.split()[0],  # BZ / L1 / L2
-                    "start_time": start_dt.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                    "end_time": end_dt.strftime("%Y-%m-%d %H:%M:%S %Z"),
-                    "one_time": bool(one_time),
-                    "used": False,
-                    "used_at": None,
-                    "created_by": st.session_state.username,
-                    "created_at": now_cdmx_str(),
-                    "active": True
-                })
+            token_ref(token_id).set({
+                "token_id": token_id,
+                "payload": payload_qr,
+                "username": st.session_state.username,
+                "client_id": (client_id or "").strip(),
+                "access_type": access_type.split()[0],  # BZ/L1/L2
+                "start_time": dt_to_str(start_dt),
+                "end_time": dt_to_str(end_dt),
+                "one_time": bool(one_time),
+                "used": False,
+                "used_at": None,
+                "active": True,
+                "created_at": now_mx_str(),
+                "created_by": st.session_state.username,
+            })
 
-                # QR PNG
-                png = make_qr_png_bytes(payload)
+            png = make_qr_png_bytes(payload_qr)
 
-                st.success("QR creado y guardado ✅")
-                st.code(payload)
+            st.success("QR creado y guardado ✅")
+            st.code(payload_qr)
+            st.image(png, caption="QR generado", width=260)
 
-                st.image(png, caption="QR generado", width=260)
-                st.download_button(
-                    "⬇️ Descargar QR (PNG)",
-                    data=png,
-                    file_name=f"DROP24_QR_{token_id}.png",
-                    mime="image/png"
-                )
+            st.download_button(
+                "⬇️ Descargar QR (PNG)",
+                data=png,
+                file_name=f"DROP24_QR_{token_id}.png",
+                mime="image/png",
+                use_container_width=True,
+            )
 
-    st.divider()
-    st.markdown("### Últimos QRs generados (para control)")
-    # Mostrar últimos 20
-    docs = db.collection(TOKENS_COL).order_by("created_at", direction=firestore.Query.DESCENDING).limit(20).stream()
+    st.markdown("---")
+    st.markdown("### Mis últimos QRs")
     rows = []
-    for d in docs:
-        dd = d.to_dict()
-        rows.append({
-            "token_id": dd.get("token_id"),
-            "client_id": dd.get("client_id"),
-            "access_type": dd.get("access_type"),
-            "start_time": dd.get("start_time"),
-            "end_time": dd.get("end_time"),
-            "one_time": dd.get("one_time"),
-            "used": dd.get("used"),
-            "created_by": dd.get("created_by"),
-            "created_at": dd.get("created_at"),
-            "active": dd.get("active"),
-        })
+    try:
+        docs = (
+            db.collection(TOKENS_COL)
+            .where("created_by", "==", st.session_state.username)
+            .limit(25)
+            .stream()
+        )
+        for d in docs:
+            x = d.to_dict()
+            rows.append({
+                "token_id": x.get("token_id"),
+                "access_type": x.get("access_type"),
+                "start_time": x.get("start_time"),
+                "end_time": x.get("end_time"),
+                "one_time": x.get("one_time"),
+                "used": x.get("used"),
+                "active": x.get("active"),
+                "created_at": x.get("created_at"),
+            })
+    except Exception as e:
+        st.error(f"Error leyendo QRs: {e}")
+
     if rows:
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
     else:
-        st.info("Aún no hay QRs.")
+        st.info("Aún no has generado QRs.")
+
+# =================================================
+# TAB 3: ADMIN (opcional)
+# =================================================
+if is_admin():
+    with tab_objs[2]:
+        st.subheader("🛡️ Admin · Usuarios")
+        st.caption("Control básico: ver usuarios y activar/desactivar.")
+
+        # Lista usuarios (limit para no pegarle duro a Firestore)
+        docs = db.collection(USERS_COL).limit(200).stream()
+        data = []
+        for d in docs:
+            x = d.to_dict()
+            addr = x.get("address", {}) or {}
+            data.append({
+                "username": x.get("username"),
+                "full_name": x.get("full_name"),
+                "phone": x.get("phone"),
+                "email": x.get("email"),
+                "active": x.get("active", True),
+                "street": addr.get("street", ""),
+                "ext": addr.get("ext_number", ""),
+                "colonia": addr.get("neighborhood", ""),
+                "borough": addr.get("borough", ""),
+                "cp": addr.get("postal_code", ""),
+                "created_at": x.get("created_at", ""),
+            })
+
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if df.empty:
+            st.info("No hay usuarios todavía.")
+        else:
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.markdown("### Cambiar estatus de usuario")
+        u_target = st.text_input("Username a modificar", placeholder="ej: cliente001").strip().lower()
+        new_active = st.selectbox("Nuevo estado", [True, False], index=0)
+
+        if st.button("Aplicar cambio", use_container_width=True):
+            if not u_target:
+                st.error("Escribe un username.")
+            else:
+                ref = user_ref(u_target)
+                if not ref.get().exists:
+                    st.error("No existe ese usuario.")
+                else:
+                    ref.update({
+                        "active": bool(new_active),
+                        "updated_at": now_mx_str(),
+                    })
+                    st.success("Actualizado ✅")
+
+# =================================================
+# FOOTER
+# =================================================
+st.markdown(
+    f"""
+    <br>
+    <div class="note" style="text-align:center;">
+        © {now_mx().year} · {ORG_NAME}<br>
+        <span class="note">Portal Drop24 en Streamlit + Firestore. Domicilio requerido para servicio a domicilio (próximamente).</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
