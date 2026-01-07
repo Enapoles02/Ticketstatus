@@ -3,7 +3,7 @@ import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timedelta
 from zoneinfo import ZoneInfo
 import re
 import io
@@ -269,33 +269,44 @@ def is_admin():
 # QR SECURITY HELPERS (NUEVO)
 # =================================================
 def get_active_qr_for_user(username: str):
-    """Devuelve un QR activo vigente (end_ts > now) si existe."""
+    """Regresa el token más reciente del usuario que siga activo y vigente (end_ts > now)."""
     now_dt = now_mx()
+
     docs = (
-    db.collection(TOKENS_COL)
-    .where("created_by", "==", st.session_state.username)
-    .limit(25)
-    .stream()
-)
+        db.collection(TOKENS_COL)
+        .where("created_by", "==", username)
+        .limit(50)
+        .stream()
+    )
+
+    best = None
+    best_created = ""
 
     for d in docs:
-        return d
-    return None
+        x = d.to_dict() or {}
 
+        if not x.get("active", False):
+            continue
 
-def next_full_hour_slots(start_hour=7, end_hour=21):
-    """Slots de 1 hora: 07:00-08:00 ..."""
-    return [f"{h:02d}:00-{h+1:02d}:00" for h in range(start_hour, end_hour)]
+        if x.get("one_time", False) and x.get("used", False):
+            continue
 
+        end_ts = x.get("end_ts")
+        if not end_ts or not isinstance(end_ts, datetime):
+            continue
 
-def slot_to_datetimes(slot_label: str, day_date):
-    """Convierte '07:00-08:00' + date -> start_dt, end_dt (CDMX)"""
-    a, b = slot_label.split("-")
-    sh, sm = map(int, a.split(":"))
-    eh, em = map(int, b.split(":"))
-    start_dt = datetime.combine(day_date, dtime(sh, sm)).replace(tzinfo=MEXICO_TZ)
-    end_dt = datetime.combine(day_date, dtime(eh, em)).replace(tzinfo=MEXICO_TZ)
-    return start_dt, end_dt
+        # Asegura timezone CDMX si viene naive
+        if end_ts.tzinfo is None:
+            end_ts = end_ts.replace(tzinfo=MEXICO_TZ)
+
+        if end_ts > now_dt:
+            ca = x.get("created_at", "")
+            if ca >= best_created:
+                best = d
+                best_created = ca
+
+    return best
+
 
 
 # =================================================
