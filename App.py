@@ -1,27 +1,32 @@
 import streamlit as st
 import pandas as pd
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, storage
 import uuid
-from datetime import datetime, time as dtime
-from zoneinfo import ZoneInfo
-import re
+from datetime import datetime, date
+import pytz
 import io
-import qrcode
-import bcrypt
-import streamlit.components.v1 as components
+
+# =========================
+# NEW: Chatbot imports
+# =========================
+import re
+import random
+from urllib.request import urlopen, Request
+import xml.etree.ElementTree as ET
 
 # =================================================
-# BRANDING / CONFIG (Drop24)
+# BRANDING / CONFIG
 # =================================================
-# OPCIÓN A (recomendado): sube tu logo local (assets/drop24_logo.png)
-# OPCIÓN B: usa URL en secrets drop24_logo_url
-LOGO_URL = st.secrets.get("drop24_logo_url", "").strip()  # opcional
+LOGO_URL = "https://static.wixstatic.com/media/96a5ca_8d5296b476da4799975aa6e250a5dee2~mv2.png/v1/crop/x_53,y_56,w_414,h_328/fill/w_152,h_141,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/SNTCC-aste2.png"
 
-ORG_NAME = "DROP24"
-ORG_SUB = "Lavandería inteligente · Registro · QR Agendado · Servicio a domicilio (próximamente)"
+ORG_NAME = (
+    "SINDICATO NACIONAL DE TRABAJADORES DE CENTROS DE CONSUMO Y DE SERVICIOS EN GENERAL, "
+    "SIMILARES Y CONEXOS DE LA REPUBLICA MEXICANA"
+)
+ORG_SUB = "AFILIADO A LA FEDERACION NACIONAL DE SINDICATOS PROSOLIDARIDAD"
 
-# Paleta estilo
+# Paleta estilo sitio
 C_TEAL_DARK = "#055671"
 C_TEAL_MID = "#6699A5"
 C_CYAN_LIGHT = "#B4DFE8"
@@ -32,15 +37,13 @@ C_TEXT_MUTED = "#6A7067"
 # STREAMLIT CONFIG
 # =================================================
 st.set_page_config(
-    page_title="Drop24 · Usuarios & QR",
-    page_icon="🧺",
+    page_title="SNTCC · Beneficio de Crédito",
+    page_icon="💳",
     layout="wide",
 )
 
-MEXICO_TZ = ZoneInfo("America/Mexico_City")
-
 # =================================================
-# CSS (MISMO ESTILO)
+# CSS (FONDO BLANCO)
 # =================================================
 st.markdown(
     f"""
@@ -90,7 +93,7 @@ st.markdown(
     .corp-logo {{
         height: 44px;
         width: auto;
-        border-radius: 10px;
+        border-radius: 8px;
         background: rgba(255,255,255,0.92);
         padding: 6px 10px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.18);
@@ -176,13 +179,14 @@ st.markdown(
         background: #FFFFFF;
         border-right: 1px solid rgba(0,0,0,0.06);
     }}
+
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # =================================================
-# FIREBASE (NO TOCAR)
+# FIREBASE (NO SE TOCA LA CONEXIÓN)
 # =================================================
 @st.cache_resource
 def init_firebase():
@@ -190,96 +194,408 @@ def init_firebase():
     if hasattr(firebase_creds, "to_dict"):
         firebase_creds = firebase_creds.to_dict()
 
+    bucket_name = st.secrets["firebase_bucket"]["firebase_bucket"]
+
     if not firebase_admin._apps:
         cred = credentials.Certificate(firebase_creds)
-        firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(cred, {"storageBucket": bucket_name})
 
-    return firestore.client()
+    return firestore.client(), storage.bucket()
 
-db = init_firebase()
+db, bucket = init_firebase()
+TZ = pytz.timezone("America/Mexico_City")
+
+def now_mx():
+    return datetime.now(TZ)
 
 # =================================================
-# SECRETS
+# COLECCIONES
 # =================================================
-ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
+EMPLOYEES_COL = "credit_employees"
+LOANS_COL = "credit_loan_requests"
+AUDIT_COL = "credit_audit"
 
 # =================================================
-# COLLECTIONS
+# REGLAS DEL PDF
 # =================================================
-USERS_COL = "drop24_users"
-TOKENS_COL = "drop24_qr_tokens"
+ANNUAL_INTEREST_SIMPLE = 0.12
+ADELANTO_MAX_NET_PCT = 0.30
+ADELANTO_FEE = 40.0
+
+# demo: estimación neto si no tienes neto real
+DEFAULT_NET_FACTOR = 0.80  # neto ~= 80% bruto (placeholder)
 
 # =================================================
 # HELPERS
 # =================================================
-def now_mx():
-    return datetime.now(MEXICO_TZ)
-
-def now_mx_str():
-    return now_mx().strftime("%Y-%m-%d %H:%M:%S %Z")
-
-def normalize_phone(x: str) -> str:
-    return re.sub(r"\D+", "", (x or "").strip())
-
-def hash_password(pw: str) -> str:
-    salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(pw.encode("utf-8"), salt).decode("utf-8")
-
-def check_password(pw: str, pw_hash: str) -> bool:
+def money(x: float) -> str:
     try:
-        return bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("utf-8"))
-    except Exception:
-        return False
+        return f"${x:,.2f}"
+    except:
+        return f"${x}"
 
-def user_ref(username: str):
-    return db.collection(USERS_COL).document(username)
+def months_between(start: date, end: date) -> int:
+    return max(0, (end.year - start.year) * 12 + (end.month - start.month))
 
-def token_ref(token_id: str):
-    return db.collection(TOKENS_COL).document(token_id)
+def amort_payment(principal: float, annual_rate: float, months: int) -> float:
+    if months <= 0:
+        return principal
+    r = annual_rate / 12.0
+    if r == 0:
+        return principal / months
+    return principal * (r * (1 + r) ** months) / ((1 + r) ** months - 1)
 
-def make_token_id() -> str:
-    return uuid.uuid4().hex[:12].upper()
+def audit_log(action: str, payload: dict):
+    try:
+        db.collection(AUDIT_COL).document(str(uuid.uuid4())).set({
+            "action": action,
+            "payload": payload,
+            "created_at": now_mx().isoformat(),
+            "created_at_ts": now_mx(),
+        })
+    except:
+        pass
 
-def make_qr_png_bytes(payload: str) -> bytes:
-    qr = qrcode.QRCode(
-        version=None,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=10,
-        border=2,
-    )
-    qr.add_data(payload)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    bio = io.BytesIO()
-    img.save(bio, format="PNG")
-    return bio.getvalue()
+# =================================================
+# NEW: CHATBOT (ligero + FAQs + chistes + noticias RSS)
+# =================================================
+BOT_NAME = "SNTCC-Bot"
 
-def dt_to_str(dt: datetime) -> str:
-    return dt.astimezone(MEXICO_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+FAQ_ANSWERS = {
+    "como funciona": (
+        "📌 Esta página sirve para solicitar:\n"
+        "1) *Adelanto de nómina* (semanal o quincenal)\n"
+        "2) *Crédito simple* (mensual)\n\n"
+        "En el menú de la izquierda ingresas tu *código de empleado* y luego eliges el tipo de crédito en la pestaña *Solicitar*."
+    ),
+    "adelanto": (
+        "💸 *Adelanto de Nómina*\n"
+        "• Sin intereses\n"
+        "• Hasta 30% del sueldo neto (en demo se estima)\n"
+        "• Comisión fija de $40\n"
+        "• Frecuencia: semanal o quincenal\n\n"
+        "Lo puedes pedir desde la pestaña *Solicitar*."
+    ),
+    "credito simple": (
+        "💳 *Crédito Simple*\n"
+        "• Hasta 1 mes de sueldo bruto\n"
+        "• Interés anual 12%\n"
+        "• Requiere mínimo 6 meses de antigüedad\n"
+        "• Descuento mensual vía nómina\n\n"
+        "La simulación de pago aparece antes de enviar la solicitud."
+    ),
+    "admin": (
+        "🛡️ *Panel Admin*\n"
+        "• Se activa con password (en secrets)\n"
+        "• Permite filtrar solicitudes, exportar CSV y cambiar status (APPROVED / REJECTED / PAID)\n\n"
+        "Si no ves el tab Admin, no estás autenticado como admin."
+    ),
+    "login": (
+        "🔐 *Login*\n"
+        "1) Abre el sidebar\n"
+        "2) Escribe tu código (ej. N001)\n"
+        "3) Clic en *Ingresar*\n\n"
+        "Luego podrás ver *Solicitar* y *Mis solicitudes*."
+    ),
+    "estatus": (
+        "📍 *Estatus típicos*\n"
+        "• SUBMITTED: enviada\n"
+        "• APPROVED: aprobada\n"
+        "• REJECTED: rechazada\n"
+        "• PAID: pagada\n\n"
+        "Admin puede cambiar el estatus desde el panel."
+    ),
+}
 
-def require_fields(data: dict, required: list[str]) -> list[str]:
-    return [k for k in required if not str(data.get(k, "")).strip()]
+FUNNY_LINES = [
+    "🤖 Soy un bot serio… excepto cuando me preguntan por café. Ahí me desconecto.",
+    "😄 Si esto fuera un videojuego, *SUBMITTED* sería el tutorial.",
+    "🧠 Consejo financiero del bot: no le prestes dinero a tu ‘yo del futuro’. Siempre se tarda en pagar.",
+    "📎 Si el préstamo fuera tamal, aquí ya estaríamos en ‘modo guajolota’.",
+    "🧾 *Dato inútil pero importante:* la paciencia no se descuenta vía nómina (todavía).",
+]
 
+def _normalize(text: str) -> str:
+    text = (text or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+def fetch_google_news_rss(query: str = "", lang: str = "es-419", country: str = "MX", max_items: int = 6):
+    """
+    Trae titulares desde Google News RSS (sin API key).
+    Si falla (sin internet), devuelve [].
+    """
+    try:
+        base = "https://news.google.com/rss"
+        if query:
+            from urllib.parse import quote_plus
+            url = f"{base}/search?q={quote_plus(query)}&hl={lang}&gl={country}&ceid={country}:{lang}"
+        else:
+            url = f"{base}?hl={lang}&gl={country}&ceid={country}:{lang}"
+
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urlopen(req, timeout=6) as resp:
+            xml_data = resp.read()
+
+        root = ET.fromstring(xml_data)
+        channel = root.find("channel")
+        if channel is None:
+            return []
+
+        items = channel.findall("item")[:max_items]
+        headlines = []
+        for it in items:
+            title = (it.findtext("title") or "").strip()
+            link = (it.findtext("link") or "").strip()
+            pub = (it.findtext("pubDate") or "").strip()
+            if title:
+                headlines.append({"title": title, "link": link, "pubDate": pub})
+        return headlines
+    except:
+        return []
+
+def bot_reply(user_msg: str, emp: dict | None, is_admin_mode: bool) -> str:
+    msg = _normalize(user_msg)
+
+    # saludos
+    if any(k in msg for k in ["hola", "buenas", "qué tal", "que tal", "hey", "holi"]):
+        name = emp["full_name"].split()[0] if emp and emp.get("full_name") else "👋"
+        return f"¡Hola, {name}! Soy {BOT_NAME}. Puedo ayudarte con *cómo usar la página*, *reglas del crédito* o traerte *titulares de hoy* (escribe: **noticias**)."
+
+    # chistes
+    if any(k in msg for k in ["chiste", "broma", "algo gracioso", "hazme reir", "hazme reír"]):
+        return random.choice(FUNNY_LINES)
+
+    # hora
+    if "hora" in msg or "qué hora" in msg or "que hora" in msg:
+        return f"🕒 Hora CDMX: **{now_mx().strftime('%H:%M')}**"
+
+    # noticias (top)
+    if msg.startswith("noticias") or "noticia" in msg or "titulares" in msg:
+        q = ""
+        parts = msg.split(" ", 1)
+        if len(parts) == 2:
+            q = parts[1].strip()
+
+        heads = fetch_google_news_rss(query=q, max_items=6)
+        if not heads:
+            return (
+                "🗞️ Ahorita no pude traer noticias (puede ser falta de internet en el hosting). "
+                "Pero puedo responder dudas de la página. Prueba: **cómo funciona**, **adelanto**, **crédito simple**, **admin**."
+            )
+
+        lines = []
+        if q:
+            lines.append(f"🗞️ Titulares de hoy sobre: **{q}**")
+        else:
+            lines.append("🗞️ Titulares de hoy (MX)")
+
+        for i, h in enumerate(heads, 1):
+            title = h["title"]
+            link = h["link"]
+            lines.append(f"{i}. [{title}]({link})")
+
+        lines.append("\n*Fuente: Google News RSS (titulares).*\n")
+        return "\n".join(lines)
+
+    # FAQs por keywords
+    if "como funciona" in msg or "cómo funciona" in msg or "funcion" in msg:
+        return FAQ_ANSWERS["como funciona"]
+
+    if "adelanto" in msg:
+        return FAQ_ANSWERS["adelanto"]
+
+    if "credito simple" in msg or "crédito simple" in msg or ("credito" in msg and "simple" in msg):
+        return FAQ_ANSWERS["credito simple"]
+
+    if "admin" in msg or "administrador" in msg:
+        return FAQ_ANSWERS["admin"]
+
+    if "login" in msg or "iniciar" in msg or "codigo" in msg or "código" in msg:
+        return FAQ_ANSWERS["login"]
+
+    if "estatus" in msg or "status" in msg:
+        return FAQ_ANSWERS["estatus"]
+
+    # contexto del usuario
+    if emp and ("mi sueldo" in msg or "mi salario" in msg):
+        gross = float(emp.get("gross_monthly_salary", 0.0))
+        return f"Tu sueldo bruto mensual en el sistema está registrado como **{money(gross)}** (demo)."
+
+    # fallback simpático
+    extras = [
+        "Si quieres, escribe **noticias** para titulares de hoy.",
+        "Puedo explicarte: **adelanto**, **crédito simple**, **admin** o **cómo funciona**.",
+        "Si quieres algo gracioso, escribe **chiste** 😄",
+    ]
+    return "🤖 No estoy 100% seguro de eso, pero puedo ayudarte si me dices qué necesitas.\n\n" + random.choice(extras)
+
+# =================================================
+# EMPLEADOS: SEED 3 FICTICIOS (IDEMPOTENTE)
+# =================================================
+def seed_employees_if_needed():
+    existing = list(db.collection(EMPLOYEES_COL).limit(1).stream())
+    if existing:
+        return
+
+    employees = [
+        {
+            "employee_code": "N001",
+            "full_name": "Sergio Napoles",
+            "gross_monthly_salary": 80000.0,
+            "hire_date": date(2024, 4, 1).isoformat(),  # > 6 meses
+            "active": True,
+        },
+        {
+            "employee_code": "R002",
+            "full_name": "Carla Rojas",
+            "gross_monthly_salary": 42000.0,
+            "hire_date": date(2025, 10, 15).isoformat(),  # < 6 meses (para probar regla)
+            "active": True,
+        },
+        {
+            "employee_code": "G003",
+            "full_name": "Luis Garcia",
+            "gross_monthly_salary": 55000.0,
+            "hire_date": date(2025, 1, 10).isoformat(),  # > 6 meses
+            "active": True,
+        },
+    ]
+
+    batch = db.batch()
+    for e in employees:
+        doc_id = str(uuid.uuid4())
+        ref = db.collection(EMPLOYEES_COL).document(doc_id)
+        batch.set(ref, {
+            **e,
+            "created_at": now_mx().isoformat(),
+            "created_at_ts": now_mx(),
+        })
+    batch.commit()
+    audit_log("seed_employees", {"count": len(employees)})
+
+seed_employees_if_needed()
+
+def get_employee_by_code(code: str):
+    code = (code or "").strip().upper()
+    if not code:
+        return None
+
+    docs = db.collection(EMPLOYEES_COL).where("employee_code", "==", code).limit(1).stream()
+    for d in docs:
+        data = d.to_dict()
+        data["_id"] = d.id
+        return data
+    return None
+
+# =================================================
+# LOANS
+# =================================================
+def submit_loan_request(employee: dict, loan_type: str, requested_amount: float, frequency: str,
+                       term_months: int | None, notes: str, computed: dict):
+    payload = {
+        "employee_code": employee["employee_code"],
+        "employee_name": employee["full_name"],
+        "loan_type": loan_type,  # ADELANTO_NOMINA | CREDITO_SIMPLE
+        "requested_amount": float(requested_amount),
+        "frequency": frequency,  # SEMANAL | QUINCENAL | MENSUAL
+        "term_months": int(term_months) if term_months else None,
+        "notes": (notes or "").strip(),
+        "status": "SUBMITTED",
+        "created_at": now_mx().isoformat(),
+        "created_at_ts": now_mx(),
+        "updated_at": now_mx().isoformat(),
+        "updated_at_ts": now_mx(),
+        **computed,
+    }
+
+    doc_id = str(uuid.uuid4())
+    db.collection(LOANS_COL).document(doc_id).set(payload)
+    audit_log("loan_submitted", {"loan_id": doc_id, **payload})
+    return doc_id
+
+def fetch_loans_for_employee(employee_code: str, limit=200):
+    employee_code = (employee_code or "").strip().upper()
+    if not employee_code:
+        return pd.DataFrame()
+
+    rows = []
+
+    # 1) Query SIN order_by (evita índice compuesto)
+    try:
+        docs = (
+            db.collection(LOANS_COL)
+            .where("employee_code", "==", employee_code)
+            .limit(limit)
+            .stream()
+        )
+        for d in docs:
+            x = d.to_dict()
+            x["_id"] = d.id
+            rows.append(x)
+
+    except Exception as e:
+        # 2) Fallback: traer todo y filtrar local (último recurso, pero no rompe la app)
+        try:
+            docs = db.collection(LOANS_COL).stream()
+            for d in docs:
+                x = d.to_dict()
+                if str(x.get("employee_code", "")).strip().upper() == employee_code:
+                    x["_id"] = d.id
+                    rows.append(x)
+        except Exception as e2:
+            st.error(f"Error consultando solicitudes en Firestore: {e2}")
+            return pd.DataFrame()
+
+    df = pd.DataFrame(rows) if rows else pd.DataFrame()
+
+    # Orden local (equivalente a order_by desc)
+    if not df.empty:
+        if "created_at" in df.columns:
+            df = df.sort_values("created_at", ascending=False)
+        elif "created_at_ts" in df.columns:
+            df = df.sort_values("created_at_ts", ascending=False)
+
+    return df
+
+def fetch_all_loans(limit=500):
+    try:
+        docs = (
+            db.collection(LOANS_COL)
+            .order_by("created_at_ts", direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .stream()
+        )
+    except:
+        docs = db.collection(LOANS_COL).stream()
+
+    rows = []
+    for d in docs:
+        x = d.to_dict()
+        x["_id"] = d.id
+        rows.append(x)
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+def update_loan_status(loan_id: str, new_status: str, admin_comment: str = ""):
+    new_status = (new_status or "").strip().upper()
+    db.collection(LOANS_COL).document(loan_id).update({
+        "status": new_status,
+        "admin_comment": (admin_comment or "").strip(),
+        "updated_at": now_mx().isoformat(),
+        "updated_at_ts": now_mx(),
+    })
+    audit_log("loan_status_updated", {"loan_id": loan_id, "status": new_status, "comment": admin_comment})
+
+# =================================================
+# ADMIN AUTH (secrets)
+# =================================================
 def is_admin():
-    entered = (st.session_state.get("admin_code_value", "") or "").strip()
-    return entered == (ADMIN_CODE or "").strip()
-
-# =================================================
-# SESSION
-# =================================================
-if "auth" not in st.session_state:
-    st.session_state.auth = False
-if "username" not in st.session_state:
-    st.session_state.username = None
-
-# =================================================
-# LOGO HTML (URL o fallback)
-# =================================================
-logo_html = (
-    f"""<img class="corp-logo" src="{LOGO_URL}" />"""
-    if LOGO_URL
-    else """<div class="corp-logo" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#055671;">DROP24</div>"""
-)
+    try:
+        pw = st.secrets["credit_admin"]["password"]
+    except:
+        return False
+    entered = st.session_state.get("admin_password_value", "")
+    return entered == pw
 
 # =================================================
 # HEADER
@@ -288,457 +604,509 @@ st.markdown(
     f"""
     <div class="corp-header">
         <div class="corp-header-left">
-            {logo_html}
+            <img class="corp-logo" src="{LOGO_URL}" />
             <div>
                 <div class="corp-header-title">{ORG_NAME}</div>
                 <div class="corp-header-sub">{ORG_SUB}</div>
             </div>
         </div>
         <div class="corp-header-right">
-            <div><b>Portal de Usuarios</b></div>
-            <div style="opacity:0.92;">Registro · Login · QR agendado</div>
+            <div><b>Plan de Beneficio de Crédito</b></div>
+            <div style="opacity:0.92;">Portal de solicitudes</div>
         </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown("<div class='big-title'>Drop24 · Usuarios & QR</div>", unsafe_allow_html=True)
-st.markdown("<div class='subtitle'>Registro de clientes y domicilio para servicio a domicilio (próximamente)</div>", unsafe_allow_html=True)
+st.markdown("<div class='big-title'>Beneficio de Crédito</div>", unsafe_allow_html=True)
+st.markdown("<div class='subtitle'>Adelanto de nómina · Crédito simple · Panel Admin</div>", unsafe_allow_html=True)
 
 # =================================================
 # SIDEBAR (LOGIN + ADMIN)
 # =================================================
 st.sidebar.title("🔐 Accesos")
 
-with st.sidebar.expander("👤 Login Usuario", expanded=True):
-    u_in = st.text_input("Usuario", value=st.session_state.get("username") or "", key="login_user")
-    p_in = st.text_input("Contraseña", type="password", key="login_pass")
-
-    if st.button("Ingresar", use_container_width=True, key="btn_login"):
-        u = (u_in or "").strip().lower()
-        if not u or not p_in:
-            st.error("Completa usuario y contraseña.")
+with st.sidebar.expander("👤 Login Empleado", expanded=True):
+    code_input = st.text_input("Código de empleado (ej. N001)", value=st.session_state.get("employee_code", ""))
+    if st.button("Ingresar", use_container_width=True):
+        emp = get_employee_by_code(code_input)
+        if not emp or not emp.get("active", True):
+            st.error("Código inválido o empleado inactivo.")
         else:
-            doc = user_ref(u).get()
-            if not doc.exists:
-                st.error("Usuario no existe.")
-            else:
-                data = doc.to_dict() or {}
-                if not data.get("active", True):
-                    st.error("Usuario desactivado. Contacta a Drop24.")
-                elif not check_password(p_in, data.get("password_hash", "")):
-                    st.error("Contraseña incorrecta.")
-                else:
-                    st.session_state.auth = True
-                    st.session_state.username = u
-                    st.success(f"Bienvenido(a), {data.get('full_name','')} ✅")
-                    st.rerun()
+            st.session_state.employee_code = emp["employee_code"]
+            st.session_state.employee = emp
+            st.success(f"Bienvenido(a), {emp['full_name']} ({emp['employee_code']})")
 
-    if st.session_state.auth and st.session_state.username:
-        st.caption(f"Sesión: **{st.session_state.username}**")
-        if st.button("Cerrar sesión", use_container_width=True, key="btn_logout"):
-            st.session_state.auth = False
-            st.session_state.username = None
+    if st.session_state.get("employee"):
+        emp = st.session_state["employee"]
+        st.caption(f"Sesión: **{emp['full_name']}** · {emp['employee_code']}")
+        if st.button("Cerrar sesión", use_container_width=True):
+            st.session_state.pop("employee", None)
+            st.session_state.pop("employee_code", None)
             st.rerun()
 
 st.sidebar.markdown("---")
-with st.sidebar.expander("🛡️ Admin (solo para control)", expanded=False):
-    st.text_input("Código admin", type="password", key="admin_code_value")
+with st.sidebar.expander("🛡️ Admin", expanded=False):
+    st.text_input("Password admin", type="password", key="admin_password_value")
     if is_admin():
         st.success("Modo ADMIN activado.")
     else:
-        st.info("Ingresa el código para ver panel Admin.")
+        st.info("Ingresa password para ver panel Admin.")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### 🧺 Acciones")
+st.sidebar.markdown("### 🧪 Códigos demo")
 st.sidebar.markdown(
     """
-    <span class="pill">Registro</span>
-    <span class="pill">Login</span>
-    <span class="pill">QR</span>
+    <span class="pill">N001</span>
+    <span class="pill">R002</span>
+    <span class="pill">G003</span>
     """,
     unsafe_allow_html=True,
 )
-st.sidebar.caption("Los datos se guardan en Firestore.")
+st.sidebar.caption("Los empleados demo se guardan en Firebase (colección credit_employees).")
 
 # =================================================
-# MAIN TABS
+# MAIN
 # =================================================
-tabs = ["📝 Registro", "📲 QR Agendado"]
+emp = st.session_state.get("employee")
+
+if not emp:
+    st.info("Inicia sesión con tu **código de empleado** para solicitar un crédito.")
+    st.markdown(
+        """
+        <div class="card">
+        <b>Reglas del Plan (según PDF):</b><br><br>
+        ✅ <b>Adelanto de Nómina</b>: semanal o quincenal, hasta 30% del sueldo neto, sin intereses, comisión $40 por transacción.<br>
+        ✅ <b>Crédito Simple</b>: hasta 1 mes de sueldo bruto, interés anual 12%, requiere al menos 6 meses de antigüedad.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # =================================================
+    # NEW: CHATBOT UI (Disponible aun sin login)
+    # =================================================
+    st.markdown("---")
+    st.markdown("## 💬 Chatbot")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            {"role": "assistant", "content": f"Hola 👋 Soy {BOT_NAME}. Pregúntame por **cómo funciona**, **adelanto**, **crédito simple**, **admin**, o escribe **noticias** / **chiste**."}
+        ]
+
+    # Botones rápidos
+    cA, cB, cC = st.columns(3)
+    with cA:
+        if st.button("😄 Chiste", use_container_width=True):
+            st.session_state.chat_history.append({"role": "user", "content": "chiste"})
+            st.rerun()
+    with cB:
+        if st.button("🧾 Cómo funciona", use_container_width=True):
+            st.session_state.chat_history.append({"role": "user", "content": "cómo funciona"})
+            st.rerun()
+    with cC:
+        if st.button("🗞️ Noticias", use_container_width=True):
+            st.session_state.chat_history.append({"role": "user", "content": "noticias"})
+            st.rerun()
+
+    # Render historial
+    for m in st.session_state.chat_history:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    user_prompt = st.chat_input("Escribe tu pregunta… (ej: 'cómo funciona', 'noticias economia', 'chiste')")
+    if user_prompt:
+        st.session_state.chat_history.append({"role": "user", "content": user_prompt})
+        with st.chat_message("user"):
+            st.markdown(user_prompt)
+
+        reply = bot_reply(user_prompt, st.session_state.get("employee"), is_admin())
+        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+        audit_log("chat_message", {
+            "employee_code": "",
+            "is_admin": bool(is_admin()),
+            "user_msg": user_prompt,
+            "bot_reply": reply[:900],
+        })
+
+    st.stop()
+
+# Datos del empleado
+gross = float(emp.get("gross_monthly_salary", 0.0))
+hire_date_str = emp.get("hire_date", "2025-01-01")
+try:
+    hire_dt = date.fromisoformat(hire_date_str)
+except:
+    hire_dt = date(2025, 1, 1)
+
+antig_months = months_between(hire_dt, now_mx().date())
+estimated_net = gross * DEFAULT_NET_FACTOR
+max_adelanto = estimated_net * ADELANTO_MAX_NET_PCT
+max_credito_simple = gross
+
+# Tabs
+tabs = ["📝 Solicitar", "📄 Mis solicitudes", "💬 Chatbot"]
 if is_admin():
     tabs.append("🛡️ Admin")
 
 tab_objs = st.tabs(tabs)
 
 # =================================================
-# TAB 1: REGISTRO
+# TAB: SOLICITAR
 # =================================================
 with tab_objs[0]:
     st.markdown(
-        """
+        f"""
         <div class="card">
-        <b>Registro de usuario Drop24</b><br>
-        Este registro también recopila tu domicilio <b>para el servicio a domicilio (próximamente)</b>.
+        <b>Empleado:</b> {emp["full_name"]} · <b>Código:</b> {emp["employee_code"]}<br>
+        <b>Sueldo bruto mensual:</b> {money(gross)}<br>
+        <b>Antigüedad:</b> {antig_months} meses (ingreso: {hire_date_str})<br>
+        <span class="note">* Para demo, el sueldo neto se estima al {int(DEFAULT_NET_FACTOR*100)}% del bruto: {money(estimated_net)}.</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    with st.form("register_form", clear_on_submit=False):
-        st.subheader("Datos del usuario")
-        c1, c2, c3 = st.columns(3)
+    loan_type = st.radio(
+        "¿Qué tipo de crédito deseas solicitar?",
+        ["Adelanto de nómina", "Crédito simple"],
+        horizontal=True
+    )
+
+    st.markdown("---")
+
+    if loan_type == "Adelanto de nómina":
+        st.subheader("Adelanto de Nómina")
+        st.caption("Liquidez inmediata: hasta 30% del sueldo neto, sin intereses, comisión $40 por transacción.")
+
+        c1, c2 = st.columns(2)
         with c1:
-            username = st.text_input("Usuario (único) *", placeholder="ej: cliente001").strip().lower()
+            frequency = st.selectbox("Frecuencia", ["SEMANAL", "QUINCENAL"])
         with c2:
-            full_name = st.text_input("Nombre completo *", placeholder="Nombre y apellido")
-        with c3:
-            phone = st.text_input("Teléfono (WhatsApp) *", placeholder="55 1234 5678")
+            requested = st.number_input(
+                "Monto a solicitar",
+                min_value=0.0,
+                max_value=float(max_adelanto),
+                value=float(max_adelanto),
+                step=100.0,
+            )
 
-        c4, c5 = st.columns(2)
-        with c4:
-            email = st.text_input("Email *", placeholder="correo@ejemplo.com")
-        with c5:
-            preferred_contact = st.selectbox("Contacto preferido", ["WhatsApp", "Llamada", "Email"])
+        st.info(f"Máximo permitido (30% neto estimado): **{money(max_adelanto)}** · Comisión: **{money(ADELANTO_FEE)}**")
 
-        st.subheader("Seguridad de cuenta")
-        p1 = st.text_input("Contraseña *", type="password")
-        p2 = st.text_input("Confirmar contraseña *", type="password")
+        notes = st.text_area("Notas (opcional)", placeholder="Ej. imprevisto médico, pago urgente, etc.")
 
-        st.markdown("---")
-        st.subheader("Domicilio (para servicio a domicilio · próximamente)")
-
-        a1, a2, a3 = st.columns(3)
-        with a1:
-            street = st.text_input("Calle *")
-        with a2:
-            ext_number = st.text_input("Número exterior *")
-        with a3:
-            int_number = st.text_input("Número interior (opcional)")
-
-        b1, b2, b3 = st.columns(3)
-        with b1:
-            neighborhood = st.text_input("Colonia *")
-        with b2:
-            borough = st.text_input("Alcaldía / Municipio *")
-        with b3:
-            postal_code = st.text_input("Código Postal *", max_chars=5)
-
-        c6, c7, c8 = st.columns(3)
-        with c6:
-            city = st.text_input("Ciudad *", value="CDMX")
-        with c7:
-            state = st.text_input("Estado *", value="Ciudad de México")
-        with c8:
-            country = st.text_input("País", value="México")
-
-        d1, d2 = st.columns(2)
-        with d1:
-            between_streets = st.text_input("Entre calles (opcional)", placeholder="Ej. Acoxpa y…")
-        with d2:
-            references = st.text_input("Referencias (opcional)", placeholder="Portón negro, edificio…")
-
-        delivery_notes = st.text_area("Instrucciones para entrega (opcional)", placeholder="Horario preferido, si hay caseta, etc.")
-
-        consent = st.checkbox("Acepto que Drop24 guarde mi domicilio para el servicio a domicilio (próximamente) *", value=False)
-
-        submitted = st.form_submit_button("Crear cuenta")
-
-    if submitted:
-        payload = {
-            "username": username,
-            "full_name": (full_name or "").strip(),
-            "phone": normalize_phone(phone),
-            "email": (email or "").strip().lower(),
-            "preferred_contact": preferred_contact,
-            "street": (street or "").strip(),
-            "ext_number": (ext_number or "").strip(),
-            "int_number": (int_number or "").strip(),
-            "neighborhood": (neighborhood or "").strip(),
-            "borough": (borough or "").strip(),
-            "postal_code": (postal_code or "").strip(),
-            "city": (city or "").strip(),
-            "state": (state or "").strip(),
-            "country": (country or "").strip(),
-            "between_streets": (between_streets or "").strip(),
-            "references": (references or "").strip(),
-            "delivery_notes": (delivery_notes or "").strip(),
-        }
-
-        required = [
-            "username", "full_name", "phone", "email",
-            "street", "ext_number", "neighborhood", "borough", "postal_code",
-            "city", "state"
-        ]
-        missing = require_fields(payload, required)
-
-        if missing:
-            st.error(f"Faltan campos obligatorios: {', '.join(missing)}")
-        elif not payload["postal_code"].isdigit() or len(payload["postal_code"]) != 5:
-            st.error("El Código Postal debe ser de 5 dígitos.")
-        elif p1 != p2:
-            st.error("Las contraseñas no coinciden.")
-        elif len(p1) < 6:
-            st.error("Contraseña muy corta (mínimo 6).")
-        elif not consent:
-            st.error("Debes aceptar el guardado de domicilio para continuar.")
-        else:
-            ref = user_ref(payload["username"])
-            if ref.get().exists:
-                st.error("Ese usuario ya existe. Elige otro.")
-            else:
-                ref.set({
-                    "username": payload["username"],
-                    "password_hash": hash_password(p1),
-                    "full_name": payload["full_name"],
-                    "phone": payload["phone"],
-                    "email": payload["email"],
-                    "preferred_contact": payload["preferred_contact"],
-                    "address": {
-                        "street": payload["street"],
-                        "ext_number": payload["ext_number"],
-                        "int_number": payload["int_number"],
-                        "neighborhood": payload["neighborhood"],
-                        "borough": payload["borough"],
-                        "postal_code": payload["postal_code"],
-                        "city": payload["city"],
-                        "state": payload["state"],
-                        "country": payload["country"],
-                        "between_streets": payload["between_streets"],
-                        "references": payload["references"],
-                        "delivery_notes": payload["delivery_notes"],
-                    },
-                    "delivery_service_future": True,
-                    "active": True,
-                    "role": "USER",
-                    "created_at": now_mx_str(),
-                    "updated_at": now_mx_str(),
-                })
-                st.success("Cuenta creada ✅ Ya puedes iniciar sesión en el sidebar.")
-
-# =================================================
-# TAB 2: QR AGENDADO
-# =================================================
-with tab_objs[1]:
-    if not st.session_state.auth:
-        st.info("Inicia sesión para generar QRs agendados.")
-        st.markdown(
-            """
-            <div class="card">
-            <b>¿Qué hace este QR?</b><br>
-            El QR contiene un token corto. La app Android validará en Firestore si está activo, dentro de horario y (si aplica) si ya fue usado.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
+        # Validación / resumen
+        total_to_discount = float(requested) + ADELANTO_FEE
         st.markdown(
             f"""
             <div class="card">
-            <b>Sesión activa:</b> {st.session_state.username}<br>
-            <span class="note">Genera un QR con ventana de tiempo. Ideal para distinguir usuarios y reservas.</span>
+            <b>Resumen</b><br>
+            Monto solicitado: <b>{money(requested)}</b><br>
+            Comisión: <b>{money(ADELANTO_FEE)}</b><br>
+            Total a descontar vía nómina: <b>{money(total_to_discount)}</b><br>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
+        if st.button("✅ Enviar solicitud de Adelanto", use_container_width=True):
+            if requested <= 0:
+                st.error("El monto debe ser mayor a 0.")
+            else:
+                computed = {
+                    "rule_max_adelanto": float(max_adelanto),
+                    "estimated_net_salary": float(estimated_net),
+                    "fee": float(ADELANTO_FEE),
+                    "total_discount": float(total_to_discount),
+                    "interest_annual": 0.0,
+                    "eligibility_ok": True,
+                    "eligibility_reason": "",
+                }
+                loan_id = submit_loan_request(
+                    emp,
+                    "ADELANTO_NOMINA",
+                    float(requested),
+                    frequency,
+                    None,
+                    notes,
+                    computed
+                )
+                st.success(f"Solicitud enviada ✅ (ID: {loan_id})")
+
+    else:
+        st.subheader("Crédito Simple")
+        st.caption("Financiamiento: hasta 1 mes de sueldo bruto, interés anual 12%, pagos periódicos vía nómina.")
+
+        eligible = antig_months >= 6
+        if not eligible:
+            st.warning("⚠️ No cumples el requisito: se requiere **mínimo 6 meses de antigüedad**.")
+
         c1, c2, c3 = st.columns(3)
         with c1:
-            client_id = st.text_input("Client ID (opcional)", placeholder="CNA1234...")
-        with c2:
-            access_type = st.selectbox("Acceso", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
-        with c3:
-            one_time = st.checkbox("QR de 1 solo uso (recomendado)", value=True)
-
-        st.markdown("### Ventana de tiempo (CDMX)")
-        d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
-        with d1:
-            start_date = st.date_input("Inicio (fecha)", value=now_mx().date(), key="sd")
-        with t1:
-            start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="st")
-        with d2:
-            end_date = st.date_input("Fin (fecha)", value=now_mx().date(), key="ed")
-        with t2:
-            end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="et")
-
-        prefix = st.text_input("Prefijo QR", value="DROP24")
-
-        if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
-            start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
-            end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
-
-            if end_dt <= start_dt:
-                st.error("La hora fin debe ser mayor que la hora inicio.")
-            else:
-                token_id = make_token_id()
-                payload_qr = f"{prefix}|{token_id}"
-
-                token_ref(token_id).set({
-                    "token_id": token_id,
-                    "payload": payload_qr,
-                    "username": st.session_state.username,
-                    "client_id": (client_id or "").strip(),
-                    "access_type": access_type.split()[0],
-
-                    "start_time": dt_to_str(start_dt),
-                    "end_time": dt_to_str(end_dt),
-
-                    "start_ts": start_dt,
-                    "end_ts": end_dt,
-
-                    "one_time": bool(one_time),
-                    "used": False,
-                    "used_at": None,
-                    "active": True,
-                    "created_at": now_mx_str(),
-                    "created_by": st.session_state.username,
-                })
-
-                png = make_qr_png_bytes(payload_qr)
-
-                st.success("QR creado y guardado ✅")
-                st.code(payload_qr)
-                st.image(png, caption="QR generado", width=260)
-
-                st.download_button(
-                    "⬇️ Descargar QR (PNG)",
-                    data=png,
-                    file_name=f"DROP24_QR_{token_id}.png",
-                    mime="image/png",
-                    use_container_width=True,
-                )
-
-        st.markdown("---")
-        st.markdown("### Mis últimos QRs")
-
-        rows = []
-        try:
-            docs = (
-                db.collection(TOKENS_COL)
-                .where("created_by", "==", st.session_state.username)
-                .limit(25)
-                .stream()
+            requested = st.number_input(
+                "Monto a solicitar",
+                min_value=0.0,
+                max_value=float(max_credito_simple),
+                value=float(max_credito_simple),
+                step=500.0,
             )
-            for d in docs:
-                x = d.to_dict() or {}
-                rows.append({
-                    "token_id": x.get("token_id"),
-                    "access_type": x.get("access_type"),
-                    "start_time": x.get("start_time"),
-                    "end_time": x.get("end_time"),
-                    "one_time": x.get("one_time"),
-                    "used": x.get("used"),
-                    "active": x.get("active"),
-                    "created_at": x.get("created_at"),
-                })
-        except Exception as e:
-            st.error(f"Error leyendo QRs: {e}")
+        with c2:
+            term_months = st.selectbox("Plazo (meses)", [3, 6, 9, 12, 18, 24], index=1)
+        with c3:
+            frequency = st.selectbox("Frecuencia de descuento", ["MENSUAL"])
 
-        if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("Aún no has generado QRs.")
+        monthly_payment = amort_payment(float(requested), ANNUAL_INTEREST_SIMPLE, int(term_months))
+        total_pay = monthly_payment * int(term_months)
+        total_interest = total_pay - float(requested)
 
+        st.info(f"Máximo permitido (1 mes bruto): **{money(max_credito_simple)}** · Interés anual: **12%**")
+
+        notes = st.text_area("Notas (opcional)", placeholder="Ej. educación, salud, mejoras del hogar, etc.")
+
+        st.markdown(
+            f"""
+            <div class="card">
+            <b>Simulación (referencial)</b><br>
+            Principal: <b>{money(requested)}</b><br>
+            Plazo: <b>{term_months} meses</b><br>
+            Pago mensual estimado: <b>{money(monthly_payment)}</b><br>
+            Total a pagar estimado: <b>{money(total_pay)}</b><br>
+            Interés total estimado: <b>{money(total_interest)}</b><br>
+            <span class="note">* Cálculo amortizado estándar con 12% anual (referencial).</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.button("✅ Enviar solicitud de Crédito Simple", use_container_width=True):
+            if requested <= 0:
+                st.error("El monto debe ser mayor a 0.")
+            elif not eligible:
+                computed = {
+                    "rule_max_credito_simple": float(max_credito_simple),
+                    "interest_annual": float(ANNUAL_INTEREST_SIMPLE),
+                    "term_months_calc": int(term_months),
+                    "monthly_payment_est": float(monthly_payment),
+                    "total_pay_est": float(total_pay),
+                    "total_interest_est": float(total_interest),
+                    "eligibility_ok": False,
+                    "eligibility_reason": "Requiere 6 meses de antigüedad",
+                    "employee_antig_months": int(antig_months),
+                }
+                loan_id = submit_loan_request(
+                    emp,
+                    "CREDITO_SIMPLE",
+                    float(requested),
+                    "MENSUAL",
+                    int(term_months),
+                    notes,
+                    computed
+                )
+                st.warning(f"Solicitud registrada, pero marcada como NO elegible por antigüedad (ID: {loan_id}).")
+            else:
+                computed = {
+                    "rule_max_credito_simple": float(max_credito_simple),
+                    "interest_annual": float(ANNUAL_INTEREST_SIMPLE),
+                    "term_months_calc": int(term_months),
+                    "monthly_payment_est": float(monthly_payment),
+                    "total_pay_est": float(total_pay),
+                    "total_interest_est": float(total_interest),
+                    "eligibility_ok": True,
+                    "eligibility_reason": "",
+                    "employee_antig_months": int(antig_months),
+                }
+                loan_id = submit_loan_request(
+                    emp,
+                    "CREDITO_SIMPLE",
+                    float(requested),
+                    "MENSUAL",
+                    int(term_months),
+                    notes,
+                    computed
+                )
+                st.success(f"Solicitud enviada ✅ (ID: {loan_id})")
 
 # =================================================
-# TAB 3: ADMIN
+# TAB: MIS SOLICITUDES
+# =================================================
+with tab_objs[1]:
+    st.subheader("📄 Mis solicitudes")
+    df_my = fetch_loans_for_employee(emp["employee_code"], limit=200)
+
+    if df_my.empty:
+        st.info("Aún no tienes solicitudes registradas.")
+    else:
+        cols = [
+            "created_at", "loan_type", "requested_amount", "frequency", "term_months",
+            "status", "eligibility_ok", "eligibility_reason", "admin_comment"
+        ]
+        show_cols = [c for c in cols if c in df_my.columns]
+
+        df_view = df_my.copy()
+
+        if "requested_amount" in df_view.columns:
+            df_view["requested_amount"] = df_view["requested_amount"].apply(lambda x: money(float(x)))
+
+        st.dataframe(df_view[show_cols], use_container_width=True)
+
+        csv_bytes = df_my.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "📥 Descargar mis solicitudes (CSV)",
+            data=csv_bytes,
+            file_name=f"mis_solicitudes_{emp['employee_code']}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+
+# =================================================
+# TAB: CHATBOT
+# =================================================
+with tab_objs[2]:
+    st.subheader("💬 Chatbot")
+    st.caption("Preguntas frecuentes, ayuda de la página, chistes y titulares del día (RSS).")
+
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = [
+            {"role": "assistant", "content": f"Hola 👋 Soy {BOT_NAME}. Pregúntame por **cómo funciona**, **adelanto**, **crédito simple**, **admin**, o escribe **noticias** / **chiste**."}
+        ]
+
+    # Botones rápidos
+    cA, cB, cC = st.columns(3)
+    with cA:
+        if st.button("😄 Chiste", use_container_width=True, key="btn_chiste_tab"):
+            st.session_state.chat_history.append({"role": "user", "content": "chiste"})
+            st.rerun()
+    with cB:
+        if st.button("🧾 Cómo funciona", use_container_width=True, key="btn_comofunciona_tab"):
+            st.session_state.chat_history.append({"role": "user", "content": "cómo funciona"})
+            st.rerun()
+    with cC:
+        if st.button("🗞️ Noticias", use_container_width=True, key="btn_noticias_tab"):
+            st.session_state.chat_history.append({"role": "user", "content": "noticias"})
+            st.rerun()
+
+    # Render historial
+    for m in st.session_state.chat_history:
+        with st.chat_message(m["role"]):
+            st.markdown(m["content"])
+
+    user_prompt = st.chat_input("Escribe tu pregunta… (ej: 'cómo funciona', 'noticias economia', 'chiste')", key="chat_input_tab")
+    if user_prompt:
+        st.session_state.chat_history.append({"role": "user", "content": user_prompt})
+        with st.chat_message("user"):
+            st.markdown(user_prompt)
+
+        reply = bot_reply(user_prompt, st.session_state.get("employee"), is_admin())
+        st.session_state.chat_history.append({"role": "assistant", "content": reply})
+        with st.chat_message("assistant"):
+            st.markdown(reply)
+
+        audit_log("chat_message", {
+            "employee_code": (st.session_state.get("employee") or {}).get("employee_code", ""),
+            "is_admin": bool(is_admin()),
+            "user_msg": user_prompt,
+            "bot_reply": reply[:900],
+        })
+
+# =================================================
+# TAB: ADMIN
 # =================================================
 if is_admin():
-    with tab_objs[2]:
-        st.subheader("🛡️ Admin · Usuarios")
-        st.caption("Control básico: ver usuarios y activar/desactivar.")
+    with tab_objs[3]:
+        st.subheader("🛡️ Panel Admin")
+        st.caption("Revisión de solicitudes, aprobación/rechazo, control de estatus y exportación.")
 
-        docs = db.collection(USERS_COL).limit(200).stream()
-        data = []
-        for d in docs:
-            x = d.to_dict() or {}
-            addr = x.get("address", {}) or {}
-            data.append({
-                "username": x.get("username"),
-                "full_name": x.get("full_name"),
-                "phone": x.get("phone"),
-                "email": x.get("email"),
-                "active": x.get("active", True),
-                "street": addr.get("street", ""),
-                "ext": addr.get("ext_number", ""),
-                "colonia": addr.get("neighborhood", ""),
-                "borough": addr.get("borough", ""),
-                "cp": addr.get("postal_code", ""),
-                "created_at": x.get("created_at", ""),
-            })
+        df_all = fetch_all_loans(limit=500)
 
-        df = pd.DataFrame(data) if data else pd.DataFrame()
-        if df.empty:
-            st.info("No hay usuarios todavía.")
+        if df_all.empty:
+            st.info("No hay solicitudes registradas todavía.")
         else:
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            # Filtros
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                status_filter = st.selectbox("Filtrar por status", ["(Todos)", "SUBMITTED", "APPROVED", "REJECTED", "PAID"], index=0)
+            with c2:
+                type_filter = st.selectbox("Filtrar por tipo", ["(Todos)", "ADELANTO_NOMINA", "CREDITO_SIMPLE"], index=0)
+            with c3:
+                search_code = st.text_input("Buscar por código empleado", value="").strip().upper()
 
-        st.markdown("---")
-        st.markdown("### Cambiar estatus de usuario")
-        u_target = st.text_input("Username a modificar", placeholder="ej: cliente001").strip().lower()
-        new_active = st.selectbox("Nuevo estado", [True, False], index=0)
+            df_f = df_all.copy()
+            if status_filter != "(Todos)" and "status" in df_f.columns:
+                df_f = df_f[df_f["status"] == status_filter]
+            if type_filter != "(Todos)" and "loan_type" in df_f.columns:
+                df_f = df_f[df_f["loan_type"] == type_filter]
+            if search_code and "employee_code" in df_f.columns:
+                df_f = df_f[df_f["employee_code"].astype(str).str.upper().str.contains(search_code)]
 
-        if st.button("Aplicar cambio", use_container_width=True, key="btn_admin_toggle"):
-            if not u_target:
-                st.error("Escribe un username.")
+            # KPIs
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Total", len(df_f))
+            if "status" in df_f.columns:
+                k2.metric("SUBMITTED", int((df_f["status"] == "SUBMITTED").sum()))
+                k3.metric("APPROVED", int((df_f["status"] == "APPROVED").sum()))
+                k4.metric("REJECTED", int((df_f["status"] == "REJECTED").sum()))
             else:
-                ref = user_ref(u_target)
-                if not ref.get().exists:
-                    st.error("No existe ese usuario.")
+                k2.metric("SUBMITTED", 0)
+                k3.metric("APPROVED", 0)
+                k4.metric("REJECTED", 0)
+
+            st.markdown("---")
+
+            # Tabla principal
+            show_cols = [
+                "created_at", "employee_code", "employee_name", "loan_type",
+                "requested_amount", "frequency", "term_months", "status",
+                "eligibility_ok", "eligibility_reason", "admin_comment", "_id"
+            ]
+            show_cols = [c for c in show_cols if c in df_f.columns]
+
+            df_view = df_f.copy()
+            if "requested_amount" in df_view.columns:
+                df_view["requested_amount"] = df_view["requested_amount"].apply(lambda x: money(float(x)))
+
+            st.dataframe(df_view[show_cols], use_container_width=True, height=420)
+
+            # Export CSV
+            csv_bytes = df_f.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📥 Exportar (CSV) lo filtrado",
+                data=csv_bytes,
+                file_name="solicitudes_filtradas.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
+            st.markdown("---")
+
+            # Acciones sobre solicitud
+            st.markdown("### ✅ Acciones")
+            loan_id = st.text_input("Pega el ID (_id) de la solicitud", value="").strip()
+            new_status = st.selectbox("Cambiar status a", ["APPROVED", "REJECTED", "PAID"], index=0)
+            admin_comment = st.text_area("Comentario Admin (opcional)", placeholder="Ej. Aprobado; descuento vía nómina a partir de X fecha.")
+
+            if st.button("Aplicar cambio", use_container_width=True):
+                if not loan_id:
+                    st.error("Pega el ID (_id) de la solicitud.")
                 else:
-                    ref.update({
-                        "active": bool(new_active),
-                        "updated_at": now_mx_str(),
-                    })
-                    st.success("Actualizado ✅")
-
-import textwrap
+                    try:
+                        update_loan_status(loan_id, new_status, admin_comment)
+                        st.success("Actualizado ✅")
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
 # =================================================
-# CONÓCENOS
-# =================================================
-conocenos_html = f"""<div class="card" style="margin-top:28px;">
-  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-    {logo_html}
-    <div>
-      <h3 style="margin:0;color:{C_TEAL_DARK};font-weight:900;">Conócenos</h3>
-      <div class="note">Tecnología, confianza y comodidad para tu ropa</div>
-    </div>
-  </div>
-
-  <hr style="margin:14px 0;border:none;border-top:1px solid #E5EFF3;">
-
-  <p style="font-size:14px;line-height:1.6;margin:0 0 12px 0;">
-    <b>Drop24</b> es una plataforma de lavandería moderna que combina
-    <b>tecnología</b>, <b>automatización</b> y <b>atención responsable</b>.
-    Estamos preparando nuestro <b>servicio a domicilio</b> para que puedas
-    olvidarte por completo del lavado de ropa.
-  </p>
-
-  <div>
-    <span class="pill">Servicio a domicilio · Próximamente</span>
-    <span class="pill">Accesos con QR</span>
-    <span class="pill">Tecnología Drop24</span>
-  </div>
-</div>"""
-
-st.markdown(conocenos_html, unsafe_allow_html=True)
-
-
-# =================================================
-# FOOTER (logo abajo)
+# FOOTER
 # =================================================
 st.markdown(
     f"""
     <br>
-    <div style="text-align:center;margin-top:30px;">
-        <div style="display:flex;justify-content:center;margin-bottom:10px;">
-            {logo_html}
-        </div>
-        <div class="note">
-            © {now_mx().year} · {ORG_NAME}<br>
-            <span class="note">Portal Drop24 en Streamlit + Firestore. Domicilio requerido para servicio a domicilio (próximamente).</span>
-        </div>
+    <div class="note" style="text-align:center;">
+        © {now_mx().year} · {ORG_SUB}<br>
+        <span class="note">Este portal es una demo en Streamlit + Firebase. Reglas aplicadas según el documento del plan de crédito.</span>
     </div>
     """,
     unsafe_allow_html=True,
