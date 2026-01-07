@@ -177,15 +177,7 @@ with tab_register:
         with c3:
             email = st.text_input("Email *")
 
-        st.markdown("### Seguridad / Identidad (sin guardar INE completa)")
-        c4, c5, c6 = st.columns(3)
-        with c4:
-            ine_last4 = st.text_input("INE (últimos 4 dígitos) *", max_chars=4)
-        with c5:
-            ine_hash_input = st.text_input("INE (número completo) (opcional, NO recomendado)", type="password")
-        with c6:
-            ine_verified = st.checkbox("INE verificada (checkbox) *", value=False)
-
+        
         st.markdown("### Ubicación")
         c7, c8 = st.columns(2)
         with c7:
