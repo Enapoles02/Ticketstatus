@@ -3,7 +3,7 @@ import pandas as pd
 import firebase_admin
 from firebase_admin import credentials, firestore
 import uuid
-from datetime import datetime
+from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 import re
 import io
@@ -13,13 +13,14 @@ import bcrypt
 # =================================================
 # BRANDING / CONFIG (Drop24)
 # =================================================
-# Pon aquí tu logo Drop24 si tienes uno (puede ser URL o dejarlo vacío)
-LOGO_URL = st.secrets.get("drop24_logo_url", "")  # opcional
+# OPCIÓN A (recomendado): sube tu logo local (assets/drop24_logo.png)
+# OPCIÓN B: usa URL en secrets drop24_logo_url
+LOGO_URL = st.secrets.get("drop24_logo_url", "").strip()  # opcional
 
 ORG_NAME = "DROP24"
 ORG_SUB = "Lavandería inteligente · Registro · QR Agendado · Servicio a domicilio (próximamente)"
 
-# Paleta estilo (misma vibra que tu ejemplo)
+# Paleta estilo
 C_TEAL_DARK = "#055671"
 C_TEAL_MID = "#6699A5"
 C_CYAN_LIGHT = "#B4DFE8"
@@ -38,7 +39,7 @@ st.set_page_config(
 MEXICO_TZ = ZoneInfo("America/Mexico_City")
 
 # =================================================
-# CSS (MISMO ESTILO QUE TU EJEMPLO)
+# CSS (MISMO ESTILO)
 # =================================================
 st.markdown(
     f"""
@@ -88,7 +89,7 @@ st.markdown(
     .corp-logo {{
         height: 44px;
         width: auto;
-        border-radius: 8px;
+        border-radius: 10px;
         background: rgba(255,255,255,0.92);
         padding: 6px 10px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.18);
@@ -180,7 +181,7 @@ st.markdown(
 )
 
 # =================================================
-# FIREBASE (NO SE TOCA TU CONEXIÓN)
+# FIREBASE (NO TOCAR)
 # =================================================
 @st.cache_resource
 def init_firebase():
@@ -199,7 +200,7 @@ db = init_firebase()
 # =================================================
 # SECRETS
 # =================================================
-ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")  # en tu secrets: admin_code = "DROP24"
+ADMIN_CODE = st.secrets.get("admin_code", "ADMIN")
 
 # =================================================
 # COLLECTIONS
@@ -217,8 +218,7 @@ def now_mx_str():
     return now_mx().strftime("%Y-%m-%d %H:%M:%S %Z")
 
 def normalize_phone(x: str) -> str:
-    digits = re.sub(r"\D+", "", (x or "").strip())
-    return digits
+    return re.sub(r"\D+", "", (x or "").strip())
 
 def hash_password(pw: str) -> str:
     salt = bcrypt.gensalt(rounds=12)
@@ -227,7 +227,7 @@ def hash_password(pw: str) -> str:
 def check_password(pw: str, pw_hash: str) -> bool:
     try:
         return bcrypt.checkpw(pw.encode("utf-8"), pw_hash.encode("utf-8"))
-    except:
+    except Exception:
         return False
 
 def user_ref(username: str):
@@ -257,16 +257,11 @@ def dt_to_str(dt: datetime) -> str:
     return dt.astimezone(MEXICO_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 def require_fields(data: dict, required: list[str]) -> list[str]:
-    missing = []
-    for k in required:
-        v = data.get(k)
-        if v is None or str(v).strip() == "":
-            missing.append(k)
-    return missing
+    return [k for k in required if not str(data.get(k, "")).strip()]
 
 def is_admin():
-    entered = st.session_state.get("admin_code_value", "")
-    return (entered or "").strip() == (ADMIN_CODE or "").strip()
+    entered = (st.session_state.get("admin_code_value", "") or "").strip()
+    return entered == (ADMIN_CODE or "").strip()
 
 # =================================================
 # SESSION
@@ -277,10 +272,17 @@ if "username" not in st.session_state:
     st.session_state.username = None
 
 # =================================================
+# LOGO HTML (URL o fallback)
+# =================================================
+logo_html = (
+    f"""<img class="corp-logo" src="{LOGO_URL}" />"""
+    if LOGO_URL
+    else """<div class="corp-logo" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#055671;">DROP24</div>"""
+)
+
+# =================================================
 # HEADER
 # =================================================
-logo_html = f"""<img class="corp-logo" src="{LOGO_URL}" />""" if LOGO_URL else """<div class="corp-logo" style="display:flex;align-items:center;justify-content:center;font-weight:900;color:#055671;">DROP24</div>"""
-
 st.markdown(
     f"""
     <div class="corp-header">
@@ -309,10 +311,10 @@ st.markdown("<div class='subtitle'>Registro de clientes y domicilio para servici
 st.sidebar.title("🔐 Accesos")
 
 with st.sidebar.expander("👤 Login Usuario", expanded=True):
-    u_in = st.text_input("Usuario", value=st.session_state.get("username") or "")
-    p_in = st.text_input("Contraseña", type="password")
+    u_in = st.text_input("Usuario", value=st.session_state.get("username") or "", key="login_user")
+    p_in = st.text_input("Contraseña", type="password", key="login_pass")
 
-    if st.button("Ingresar", use_container_width=True):
+    if st.button("Ingresar", use_container_width=True, key="btn_login"):
         u = (u_in or "").strip().lower()
         if not u or not p_in:
             st.error("Completa usuario y contraseña.")
@@ -321,7 +323,7 @@ with st.sidebar.expander("👤 Login Usuario", expanded=True):
             if not doc.exists:
                 st.error("Usuario no existe.")
             else:
-                data = doc.to_dict()
+                data = doc.to_dict() or {}
                 if not data.get("active", True):
                     st.error("Usuario desactivado. Contacta a Drop24.")
                 elif not check_password(p_in, data.get("password_hash", "")):
@@ -334,7 +336,7 @@ with st.sidebar.expander("👤 Login Usuario", expanded=True):
 
     if st.session_state.auth and st.session_state.username:
         st.caption(f"Sesión: **{st.session_state.username}**")
-        if st.button("Cerrar sesión", use_container_width=True):
+        if st.button("Cerrar sesión", use_container_width=True, key="btn_logout"):
             st.session_state.auth = False
             st.session_state.username = None
             st.rerun()
@@ -369,7 +371,7 @@ if is_admin():
 tab_objs = st.tabs(tabs)
 
 # =================================================
-# TAB 1: REGISTRO (SIN INE + DOMICILIO COMPLETO)
+# TAB 1: REGISTRO
 # =================================================
 with tab_objs[0]:
     st.markdown(
@@ -514,7 +516,7 @@ with tab_objs[0]:
                 st.success("Cuenta creada ✅ Ya puedes iniciar sesión en el sidebar.")
 
 # =================================================
-# TAB 2: QR AGENDADO (requiere login)
+# TAB 2: QR AGENDADO
 # =================================================
 with tab_objs[1]:
     if not st.session_state.auth:
@@ -542,7 +544,7 @@ with tab_objs[1]:
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        client_id = st.text_input("Client ID (si ya lo tienes en tu base) (opcional)", placeholder="CNA1234...")
+        client_id = st.text_input("Client ID (opcional)", placeholder="CNA1234...")
     with c2:
         access_type = st.selectbox("Acceso", ["BZ (Buzón)", "L1 (Locker 1)", "L2 (Locker 2)"])
     with c3:
@@ -551,17 +553,17 @@ with tab_objs[1]:
     st.markdown("### Ventana de tiempo (CDMX)")
     d1, t1, d2, t2 = st.columns([1, 1, 1, 1])
     with d1:
-        start_date = st.date_input("Inicio (fecha)", value=now_mx().date())
+        start_date = st.date_input("Inicio (fecha)", value=now_mx().date(), key="sd")
     with t1:
-        start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0))
+        start_time = st.time_input("Inicio (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="st")
     with d2:
-        end_date = st.date_input("Fin (fecha)", value=now_mx().date())
+        end_date = st.date_input("Fin (fecha)", value=now_mx().date(), key="ed")
     with t2:
-        end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0))
+        end_time = st.time_input("Fin (hora)", value=now_mx().time().replace(second=0, microsecond=0), key="et")
 
     prefix = st.text_input("Prefijo QR", value="DROP24")
 
-    if st.button("✅ Crear QR", use_container_width=True):
+    if st.button("✅ Crear QR", use_container_width=True, key="btn_create_qr"):
         start_dt = datetime.combine(start_date, start_time).replace(tzinfo=MEXICO_TZ)
         end_dt = datetime.combine(end_date, end_time).replace(tzinfo=MEXICO_TZ)
 
@@ -577,8 +579,15 @@ with tab_objs[1]:
                 "username": st.session_state.username,
                 "client_id": (client_id or "").strip(),
                 "access_type": access_type.split()[0],  # BZ/L1/L2
+
+                # Strings (display)
                 "start_time": dt_to_str(start_dt),
                 "end_time": dt_to_str(end_dt),
+
+                # Timestamps reales (para Android)
+                "start_ts": start_dt,
+                "end_ts": end_dt,
+
                 "one_time": bool(one_time),
                 "used": False,
                 "used_at": None,
@@ -612,7 +621,7 @@ with tab_objs[1]:
             .stream()
         )
         for d in docs:
-            x = d.to_dict()
+            x = d.to_dict() or {}
             rows.append({
                 "token_id": x.get("token_id"),
                 "access_type": x.get("access_type"),
@@ -632,18 +641,17 @@ with tab_objs[1]:
         st.info("Aún no has generado QRs.")
 
 # =================================================
-# TAB 3: ADMIN (opcional)
+# TAB 3: ADMIN
 # =================================================
 if is_admin():
     with tab_objs[2]:
         st.subheader("🛡️ Admin · Usuarios")
         st.caption("Control básico: ver usuarios y activar/desactivar.")
 
-        # Lista usuarios (limit para no pegarle duro a Firestore)
         docs = db.collection(USERS_COL).limit(200).stream()
         data = []
         for d in docs:
-            x = d.to_dict()
+            x = d.to_dict() or {}
             addr = x.get("address", {}) or {}
             data.append({
                 "username": x.get("username"),
@@ -670,7 +678,7 @@ if is_admin():
         u_target = st.text_input("Username a modificar", placeholder="ej: cliente001").strip().lower()
         new_active = st.selectbox("Nuevo estado", [True, False], index=0)
 
-        if st.button("Aplicar cambio", use_container_width=True):
+        if st.button("Aplicar cambio", use_container_width=True, key="btn_admin_toggle"):
             if not u_target:
                 st.error("Escribe un username.")
             else:
@@ -685,14 +693,54 @@ if is_admin():
                     st.success("Actualizado ✅")
 
 # =================================================
-# FOOTER
+# CONÓCENOS
+# =================================================
+st.markdown(
+    f"""
+    <div class="card" style="margin-top:28px;">
+        <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+            {logo_html}
+            <div>
+                <h3 style="margin:0;color:{C_TEAL_DARK};font-weight:900;">
+                    Conócenos
+                </h3>
+                <div class="note">
+                    Tecnología, confianza y comodidad para tu ropa
+                </div>
+            </div>
+        </div>
+
+        <hr style="margin:14px 0;border:none;border-top:1px solid #E5EFF3;">
+
+        <p style="font-size:14px;line-height:1.6;">
+            <b>Drop24</b> es una plataforma de lavandería moderna que combina
+            <b>tecnología</b>, <b>automatización</b> y <b>atención responsable</b>.
+            Estamos preparando nuestro <b>servicio a domicilio</b> para que puedas
+            olvidarte por completo del lavado de ropa.
+        </p>
+
+        <div class="pill">Servicio a domicilio · Próximamente</div>
+        <div class="pill">Accesos con QR</div>
+        <div class="pill">Tecnología Drop24</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+# =================================================
+# FOOTER (logo abajo)
 # =================================================
 st.markdown(
     f"""
     <br>
-    <div class="note" style="text-align:center;">
-        © {now_mx().year} · {ORG_NAME}<br>
-        <span class="note">Portal Drop24 en Streamlit + Firestore. Domicilio requerido para servicio a domicilio (próximamente).</span>
+    <div style="text-align:center;margin-top:30px;">
+        <div style="display:flex;justify-content:center;margin-bottom:10px;">
+            {logo_html}
+        </div>
+        <div class="note">
+            © {now_mx().year} · {ORG_NAME}<br>
+            <span class="note">Portal Drop24 en Streamlit + Firestore. Domicilio requerido para servicio a domicilio (próximamente).</span>
+        </div>
     </div>
     """,
     unsafe_allow_html=True,
