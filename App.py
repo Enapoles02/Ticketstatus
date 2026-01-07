@@ -7,6 +7,7 @@ from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 import re
 import io
+
 import qrcode
 import bcrypt
 import streamlit.components.v1 as components
@@ -264,6 +265,93 @@ def is_admin():
     entered = (st.session_state.get("admin_code_value", "") or "").strip()
     return entered == (ADMIN_CODE or "").strip()
 
+# ---------------------------
+# CHATBOT HELPERS (NUEVO)
+# ---------------------------
+def drop24_help_answer(user_text: str) -> str:
+    """
+    Chatbot tipo Help Center (sin IA).
+    Responde por keywords y guía al cliente.
+    """
+    t = (user_text or "").lower().strip()
+
+    # keywords comunes
+    if any(k in t for k in ["buzon", "buzón", "24/7", "depositar", "dejar ropa"]):
+        return (
+            "🧺 **Buzón 24/7 (Drop24)**\n\n"
+            "1) Te registras en mostrador y te damos tu **QR**.\n"
+            "2) Escaneas el QR en el buzón.\n"
+            "3) La puerta se libera y dejas tu ropa en **bolsa/morral** identificado.\n"
+            "4) Nuestro equipo recolecta en el siguiente horario hábil y empieza el proceso.\n\n"
+            "Si me dices tu colonia o si usarás **locker**, te indico la mejor opción."
+        )
+
+    if any(k in t for k in ["locker", "casillero", "recolección 24/7", "recoger 24"]):
+        return (
+            "🔐 **Lockers / Recolección 24/7**\n\n"
+            "Puedes usar lockers para **entregar o recoger** dentro del horario definido.\n"
+            "Si ya tienes tu QR agendado, dime si es **L1/L2/BZ** y el horario, y te explico el paso a paso."
+        )
+
+    if any(k in t for k in ["qr", "codigo", "token", "agendado", "ventana"]):
+        return (
+            "📲 **QR Agendado**\n\n"
+            "Tu QR contiene un **token** que se valida (activo, horario y si es de 1 uso).\n"
+            "Si tu QR no funciona:\n"
+            "- Revisa que estés dentro de la **ventana de tiempo**\n"
+            "- Confirma que no esté marcado como **used** (si era 1 uso)\n"
+            "- Verifica que el acceso sea correcto: **BZ / L1 / L2**"
+        )
+
+    if any(k in t for k in ["tiempo", "entrega", "cuando", "listo", "24 hrs", "24h"]):
+        return (
+            "⏱️ **Tiempos de entrega**\n\n"
+            "Depende del volumen y tipo de prenda.\n"
+            "Como regla práctica: muchas órdenes se entregan **en 24–48 hrs**.\n\n"
+            "Dime: ¿cuántos kg aprox y si hay edredón/cobijas? y te digo un estimado."
+        )
+
+    if any(k in t for k in ["mancha", "quem", "quemada", "dañ", "delicad", "especial"]):
+        return (
+            "🧴 **Manchas / prendas delicadas**\n\n"
+            "Cuéntame:\n"
+            "1) ¿Qué prenda es y de qué material?\n"
+            "2) ¿Qué mancha es (grasa, tinta, vino, etc.)?\n"
+            "3) ¿Hace cuánto pasó?\n\n"
+            "Con eso te digo el tratamiento recomendado y precauciones."
+        )
+
+    if any(k in t for k in ["precio", "cuanto cuesta", "tarifa", "$", "kg"]):
+        return (
+            "💸 **Precios**\n\n"
+            "Dime qué servicio buscas:\n"
+            "- Lavado por **kg**\n"
+            "- Secado\n"
+            "- Planchado\n"
+            "- Edredones/cobijas\n\n"
+            "y te paso el detalle (o te confirmo el precio vigente en sucursal)."
+        )
+
+    if any(k in t for k in ["horario", "abren", "cierran", "ubicacion", "dirección", "direccion"]):
+        return (
+            "📍 **Ubicación / Horarios**\n\n"
+            "Compárteme qué necesitas:\n"
+            "- **Horario** de mostrador\n"
+            "- **Cómo llegar**\n\n"
+            "y te lo paso. (Si quieres, dime si vienes desde Acoxpa/Coapa)."
+        )
+
+    return (
+        "¡Claro! 🙌\n\n"
+        "Para ayudarte rápido, dime cuál es tu duda:\n"
+        "1) Buzón 24/7\n"
+        "2) QR agendado\n"
+        "3) Tiempos de entrega\n"
+        "4) Precios\n"
+        "5) Prendas delicadas/manchas\n\n"
+        "Escribe el número o cuéntame tu caso."
+    )
+
 # =================================================
 # SESSION
 # =================================================
@@ -357,6 +445,7 @@ st.sidebar.markdown(
     <span class="pill">Registro</span>
     <span class="pill">Login</span>
     <span class="pill">QR</span>
+    <span class="pill">Chatbot</span>
     """,
     unsafe_allow_html=True,
 )
@@ -365,7 +454,7 @@ st.sidebar.caption("Los datos se guardan en Firestore.")
 # =================================================
 # MAIN TABS
 # =================================================
-tabs = ["📝 Registro", "📲 QR Agendado"]
+tabs = ["📝 Registro", "📲 QR Agendado", "🤖 Chatbot"]
 if is_admin():
     tabs.append("🛡️ Admin")
 
@@ -639,12 +728,70 @@ with tab_objs[1]:
         else:
             st.info("Aún no has generado QRs.")
 
+# =================================================
+# TAB 3: CHATBOT (NUEVO)
+# =================================================
+with tab_objs[2]:
+    st.markdown(
+        """
+        <div class="card">
+        <b>🤖 Chatbot Drop24</b><br>
+        Soporte tipo “página de ayuda”: buzón 24/7, QR, lockers, tiempos y cuidado de prendas.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # historial por sesión
+    if "drop24_chat" not in st.session_state:
+        st.session_state.drop24_chat = [
+            {"role": "assistant", "content": "¡Hola! Soy el asistente de Drop24 🧺 ¿Qué duda tienes hoy?"}
+        ]
+
+    # FAQ rápida
+    with st.expander("📌 Preguntas frecuentes (FAQ)", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        if c1.button("¿Cómo funciona el buzón 24/7?", use_container_width=True):
+            st.session_state.drop24_chat.append({"role": "user", "content": "¿Cómo funciona el buzón 24/7?"})
+            st.rerun()
+        if c2.button("¿Cuánto tarda la entrega?", use_container_width=True):
+            st.session_state.drop24_chat.append({"role": "user", "content": "¿Cuánto tarda la entrega?"})
+            st.rerun()
+        if c3.button("Problemas con mi QR", use_container_width=True):
+            st.session_state.drop24_chat.append({"role": "user", "content": "Mi QR no funciona, ¿qué reviso?"})
+            st.rerun()
+
+    st.markdown("---")
+
+    # pintar chat
+    for m in st.session_state.drop24_chat:
+        with st.chat_message(m["role"]):
+            st.write(m["content"])
+
+    # input nativo
+    user_text = st.chat_input("Escribe tu duda…")
+    if user_text:
+        st.session_state.drop24_chat.append({"role": "user", "content": user_text})
+        reply = drop24_help_answer(user_text)
+        st.session_state.drop24_chat.append({"role": "assistant", "content": reply})
+        st.rerun()
+
+    # botón limpiar
+    colA, colB = st.columns([1, 3])
+    with colA:
+        if st.button("🧹 Limpiar chat", use_container_width=True):
+            st.session_state.drop24_chat = [
+                {"role": "assistant", "content": "Listo ✅ ¿Qué duda tienes ahora?"}
+            ]
+            st.rerun()
+    with colB:
+        st.caption("Tip: usa las FAQ para respuestas rápidas.")
 
 # =================================================
-# TAB 3: ADMIN
+# TAB 4: ADMIN
 # =================================================
 if is_admin():
-    with tab_objs[2]:
+    with tab_objs[3]:
         st.subheader("🛡️ Admin · Usuarios")
         st.caption("Control básico: ver usuarios y activar/desactivar.")
 
@@ -723,7 +870,6 @@ conocenos_html = f"""<div class="card" style="margin-top:28px;">
 </div>"""
 
 st.markdown(conocenos_html, unsafe_allow_html=True)
-
 
 # =================================================
 # FOOTER (logo abajo)
