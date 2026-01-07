@@ -649,7 +649,7 @@ tab_objs = st.tabs(tabs)
 # =================================================
 # TAB 4: CÓMO FUNCIONA
 # =================================================
-with tab_objs[3]:
+with tab_objs[1]:
     st.markdown(
         """
         <div class="card">
@@ -864,7 +864,7 @@ with tab_objs[0]:
 # =================================================
 # TAB 2: QR AGENDADO
 # =================================================
-with tab_objs[1]:
+with tab_objs[2]:
     if not st.session_state.auth:
         st.info("Inicia sesión para generar QRs agendados.")
         st.markdown(
@@ -1023,7 +1023,7 @@ with tab_objs[1]:
 # =================================================
 # TAB 3: CHATBOT (NUEVO)
 # =================================================
-with tab_objs[2]:
+with tab_objs[3]:
     st.markdown(
         """
         <div class="card">
