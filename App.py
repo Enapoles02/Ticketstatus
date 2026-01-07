@@ -771,7 +771,7 @@ with tab_objs[1]:
             )
             slot_label = slot_map[slot_display]  # esto queda tipo '19:00-20:00'
 
-            st.warning("⚠️ Si no se recoge a tiempo, se guarda en almacén y tendrás que solicitar apoyo vía WhatsApp.")
+            st.warning("⚠️ Si no se recoge a tiempo, se guarda en almacén y tendrás que solicitar apoyo vía WhatsApp : +52 33 4392 8767")
         
         if st.button("✅ Crear QR (15 min)", use_container_width=True, key="btn_create_qr_fixed"):
             # 1) Bloqueo: si ya tiene uno activo vigente, no crear otro
