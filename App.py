@@ -646,6 +646,75 @@ if is_admin():
 
 
 tab_objs = st.tabs(tabs)
+# =================================================
+# TAB 4: CÓMO FUNCIONA
+# =================================================
+with tab_objs[3]:
+    st.markdown(
+        """
+        <div class="card">
+        <b>ℹ️ ¿Cómo funciona Drop24?</b><br>
+        Aquí te explicamos paso a paso cómo usar el portal, el QR agendado y el buzón/lockers.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+        <div class="card">
+        <b>1) 📝 Registro</b><br>
+        - Crea tu usuario y contraseña.<br>
+        - Captura tu teléfono y correo.<br>
+        - Agrega tu domicilio (para servicio a domicilio próximamente).<br>
+        </div>
+
+        <div class="card">
+        <b>2) 📲 Login</b><br>
+        - Inicia sesión desde la parte superior (más cómodo en teléfono).<br>
+        - Con sesión activa podrás generar QRs agendados y ver tus tokens.<br>
+        </div>
+
+        <div class="card">
+        <b>3) 🔒 QR Agendado (seguridad)</b><br>
+        - Puedes generar un QR con ventana de tiempo.<br>
+        - Por seguridad: el QR dura <b>15 minutos</b> (buzón) y solo puedes tener <b>1 QR activo</b> a la vez.<br>
+        - Si es de 1 uso, se marca como usado después de abrir.<br>
+        </div>
+
+        <div class="card">
+        <b>4) 🧺 Buzón 24/7</b><br>
+        - Te registras y obtienes tu QR.<br>
+        - Escaneas el QR en el buzón y depositas tu ropa identificada.<br>
+        - Recolectamos en el siguiente horario hábil y comenzamos el proceso.<br>
+        </div>
+
+        <div class="card">
+        <b>5) 🔐 Lockers (L1 / L2)</b><br>
+        - Si eliges Locker, seleccionas un rango de 1 hora (ej. 19:00–20:00).<br>
+        - Tu QR solo funciona dentro de esa ventana.<br>
+        - Si no se recoge a tiempo, se guarda en almacén y se solicita apoyo por WhatsApp.<br>
+        </div>
+
+        <div class="card">
+        <b>6) 🤖 Chatbot</b><br>
+        - Resuelve dudas rápidas: precios, buzón, QR, tiempos de entrega y especiales.<br>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
+        <div class="card">
+        <b>💬 Soporte</b><br>
+        ¿Necesitas ayuda con tu QR o locker? Contáctanos por WhatsApp.<br><br>
+        👉 <a href="https://wa.me/523343928767" target="_blank"><b>Escríbenos aquí</b></a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 # =================================================
 # TAB 1: REGISTRO
@@ -1007,74 +1076,7 @@ with tab_objs[2]:
     with colB:
         st.caption("Tip: usa las FAQ para respuestas rápidas.")
 
-# =================================================
-# TAB 4: CÓMO FUNCIONA
-# =================================================
-with tab_objs[3]:
-    st.markdown(
-        """
-        <div class="card">
-        <b>ℹ️ ¿Cómo funciona Drop24?</b><br>
-        Aquí te explicamos paso a paso cómo usar el portal, el QR agendado y el buzón/lockers.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
-    st.markdown(
-        f"""
-        <div class="card">
-        <b>1) 📝 Registro</b><br>
-        - Crea tu usuario y contraseña.<br>
-        - Captura tu teléfono y correo.<br>
-        - Agrega tu domicilio (para servicio a domicilio próximamente).<br>
-        </div>
-
-        <div class="card">
-        <b>2) 📲 Login</b><br>
-        - Inicia sesión desde la parte superior (más cómodo en teléfono).<br>
-        - Con sesión activa podrás generar QRs agendados y ver tus tokens.<br>
-        </div>
-
-        <div class="card">
-        <b>3) 🔒 QR Agendado (seguridad)</b><br>
-        - Puedes generar un QR con ventana de tiempo.<br>
-        - Por seguridad: el QR dura <b>15 minutos</b> (buzón) y solo puedes tener <b>1 QR activo</b> a la vez.<br>
-        - Si es de 1 uso, se marca como usado después de abrir.<br>
-        </div>
-
-        <div class="card">
-        <b>4) 🧺 Buzón 24/7</b><br>
-        - Te registras y obtienes tu QR.<br>
-        - Escaneas el QR en el buzón y depositas tu ropa identificada.<br>
-        - Recolectamos en el siguiente horario hábil y comenzamos el proceso.<br>
-        </div>
-
-        <div class="card">
-        <b>5) 🔐 Lockers (L1 / L2)</b><br>
-        - Si eliges Locker, seleccionas un rango de 1 hora (ej. 19:00–20:00).<br>
-        - Tu QR solo funciona dentro de esa ventana.<br>
-        - Si no se recoge a tiempo, se guarda en almacén y se solicita apoyo por WhatsApp.<br>
-        </div>
-
-        <div class="card">
-        <b>6) 🤖 Chatbot</b><br>
-        - Resuelve dudas rápidas: precios, buzón, QR, tiempos de entrega y especiales.<br>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        """
-        <div class="card">
-        <b>💬 Soporte</b><br>
-        ¿Necesitas ayuda con tu QR o locker? Contáctanos por WhatsApp.<br><br>
-        👉 <a href="https://wa.me/523343928767" target="_blank"><b>Escríbenos aquí</b></a>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 
