@@ -640,7 +640,7 @@ st.sidebar.markdown(
 # =================================================
 # MAIN TABS
 # =================================================
-tabs = ["📝 Registro", "📲 QR Agendado", "🤖 Chatbot", "ℹ️ Cómo funciona"]
+tabs = [ "ℹ️ Cómo funciona","📝 Registro", "📲 QR Agendado","🤖 Chatbot Ayuda" ]
 if is_admin():
     tabs.append("🛡️ Admin")
 
