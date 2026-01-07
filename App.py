@@ -272,13 +272,12 @@ def get_active_qr_for_user(username: str):
     """Devuelve un QR activo vigente (end_ts > now) si existe."""
     now_dt = now_mx()
     docs = (
-        db.collection(TOKENS_COL)
-        .where("created_by", "==", username)
-        .where("active", "==", True)
-        .where("end_ts", ">", now_dt)
-        .limit(1)
-        .stream()
-    )
+    db.collection(TOKENS_COL)
+    .where("created_by", "==", st.session_state.username)
+    .limit(25)
+    .stream()
+)
+
     for d in docs:
         return d
     return None
