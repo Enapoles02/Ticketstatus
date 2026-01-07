@@ -823,12 +823,12 @@ with tab_objs[1]:
         rows = []
         try:
             docs = (
-            db.collection(TOKENS_COL)
-            .where("created_by", "==", st.session_state.username)
-            .order_by("created_at", direction=firestore.Query.DESCENDING)
-            .limit(25)
-            .stream()
-        )
+                db.collection(TOKENS_COL)
+                .where("created_by", "==", st.session_state.username)
+                .limit(50)   # leo más y ordeno aquí
+                .stream()
+            )
+
 
             for d in docs:
                 x = d.to_dict() or {}
@@ -844,6 +844,14 @@ with tab_objs[1]:
                 })
         except Exception as e:
             st.error(f"Error leyendo QRs: {e}")
+
+        if rows:
+            df_rows = pd.DataFrame(rows)
+            if "created_at" in df_rows.columns:
+                df_rows = df_rows.sort_values("created_at", ascending=False)
+            st.dataframe(df_rows, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no has generado QRs.")
 
         if rows:
             st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
