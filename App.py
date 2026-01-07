@@ -9,6 +9,7 @@ import re
 import io
 import qrcode
 import bcrypt
+import streamlit.components.v1 as components
 
 # =================================================
 # BRANDING / CONFIG (Drop24)
