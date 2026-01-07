@@ -649,7 +649,7 @@ tab_objs = st.tabs(tabs)
 # =================================================
 # TAB 4: CÓMO FUNCIONA
 # =================================================
-with tab_objs[1]:
+with tab_objs[0]:
     st.markdown(
         """
         <div class="card">
@@ -719,7 +719,7 @@ with tab_objs[1]:
 # =================================================
 # TAB 1: REGISTRO
 # =================================================
-with tab_objs[0]:
+with tab_objs[1]:
     st.markdown(
         """
         <div class="card">
